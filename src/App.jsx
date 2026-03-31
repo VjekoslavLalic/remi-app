@@ -403,7 +403,7 @@ export default function App() {
               Back to game
             </button>
             <button className="primary-button" onClick={confirmGoHome}>
-              Home
+              End and go home
             </button>
           </div>
         </div>
