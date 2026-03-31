@@ -1,302 +1,557 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import './App.css';
+
+const HISTORY_KEY = 'remi-history-v1';
+
+const initialPlayer = (name, index) => ({
+  id: `${Date.now()}-${index}-${name}`,
+  name: name.trim() || `Player ${index + 1}`,
+  score: 0,
+  lastRoundScore: 0,
+});
+
+function formatDate(value) {
+  const date = new Date(value);
+  return date.toLocaleString('hr-HR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 export default function App() {
-  const [step, setStep] = useState('setup'); 
+  const [step, setStep] = useState('setup');
+  const [gameView, setGameView] = useState('roundSetup');
   const [numPlayers, setNumPlayers] = useState(2);
-  const [playerNames, setPlayerNames] = useState([]);
+  const [playerNames, setPlayerNames] = useState(['', '']);
   const [players, setPlayers] = useState([]);
-  const [currentShuffler, setCurrentShuffler] = useState(0);
-  const [winnerIndex, setWinnerIndex] = useState(null);
-  const [winnerType, setWinnerType] = useState(null);
+  const [currentShufflerIndex, setCurrentShufflerIndex] = useState(0);
+  const [winnerId, setWinnerId] = useState(null);
+  const [winnerType, setWinnerType] = useState('regular');
   const [roundScores, setRoundScores] = useState({});
-  const [roundNumber, setRoundNumber] = useState(1); // dodano praćenje runde
-  const [gameWinner, setGameWinner] = useState(null); // za ekran kraja
-  const [gameHistory, setGameHistory] = useState([]); // povijest igara
-  const [showHistory, setShowHistory] = useState(false); // prikaz history page
-  const [expandedGameIndex, setExpandedGameIndex] = useState(null); // koja igra je otvorena
+  const [roundNumber, setRoundNumber] = useState(1);
+  const [gameWinner, setGameWinner] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [expandedHistoryId, setExpandedHistoryId] = useState(null);
+  const [pendingPlayers, setPendingPlayers] = useState([]);
+  const [openMenuPlayerId, setOpenMenuPlayerId] = useState(null);
+  const [gameHistory, setGameHistory] = useState(() => {
+    try {
+      const stored = localStorage.getItem(HISTORY_KEY);
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
 
+  useEffect(() => {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(gameHistory));
+  }, [gameHistory]);
 
-  const startGame = () => {
-    const initialPlayers = playerNames.map(name => ({ name, score: 0, lastRoundScore: 0 }));
-    const shuffledIndex = Math.floor(Math.random() * initialPlayers.length);
-    setCurrentShuffler(shuffledIndex);
-    setPlayers(initialPlayers);
-    setStep('game');
+  useEffect(() => {
+    setPlayerNames((prev) => {
+      const next = [...prev];
+      while (next.length < numPlayers) next.push('');
+      return next.slice(0, numPlayers);
+    });
+  }, [numPlayers]);
+
+  const currentShuffler = players[currentShufflerIndex] ?? null;
+
+  const sortedLeaderboard = useMemo(
+    () => [...players].sort((a, b) => a.score - b.score),
+    [players],
+  );
+
+  const resetRoundInputs = () => {
+    setWinnerId(null);
+    setWinnerType('regular');
+    setRoundScores({});
+    setOpenMenuPlayerId(null);
+  };
+
+  const clearGameState = () => {
+    setStep('setup');
+    setGameView('roundSetup');
+    setPlayers([]);
+    setPendingPlayers([]);
+    setCurrentShufflerIndex(0);
     setRoundNumber(1);
+    setGameWinner(null);
+    resetRoundInputs();
+  };
+
+  const confirmGoHome = () => {
+    const confirmed = window.confirm('Are you sure you want to go home? Current game progress will stay only if you finish the game first.');
+    if (!confirmed) return;
+    clearGameState();
+  };
+
+  const beginGameSetup = () => {
+    const trimmedPlayers = playerNames
+      .slice(0, numPlayers)
+      .map((name, index) => initialPlayer(name, index));
+
+    if (trimmedPlayers.some((player) => !player.name.trim())) {
+      alert('Please enter all player names before starting.');
+      return;
+    }
+
+    setPendingPlayers(trimmedPlayers);
+    setStep('chooseShuffler');
+  };
+
+  const confirmFirstShuffler = (playerIndex) => {
+    setPlayers(pendingPlayers);
+    setCurrentShufflerIndex(playerIndex);
+    setRoundNumber(1);
+    resetRoundInputs();
+    setGameView('roundSetup');
+    setStep('game');
+  };
+
+  const proceedToRoundScores = () => {
+    if (!winnerId) {
+      alert('Select the winner first.');
+      return;
+    }
+
+    setGameView('roundScores');
+  };
+
+  const setScoreForPlayer = (playerId, value) => {
+    setRoundScores((prev) => ({ ...prev, [playerId]: value }));
   };
 
   const applyRound = () => {
-    if (winnerIndex === null || !winnerType) { alert('Select winner and type first!'); return; }
-    const newPlayers = [...players];
-    const winnerPoints = winnerType === 'hand' ? -100 : -40;
-    newPlayers[winnerIndex].score += winnerPoints;
-    newPlayers[winnerIndex].lastRoundScore = winnerPoints;
+    if (!winnerId) {
+      alert('Select the winner first.');
+      setGameView('roundSetup');
+      return;
+    }
 
-    newPlayers.forEach((p,i) => {
-      if(i!==winnerIndex){
-        const points = Number(roundScores[i])||0;
-        p.score += points;
-        p.lastRoundScore = points;
+    const nextPlayers = players.map((player) => {
+      if (player.id === winnerId) {
+        const winnerPoints = winnerType === 'hand' ? -100 : -40;
+        return {
+          ...player,
+          score: player.score + winnerPoints,
+          lastRoundScore: winnerPoints,
+        };
       }
+
+      const enteredScore = Number(roundScores[player.id] || 0);
+      const appliedScore = winnerType === 'hand' ? enteredScore * 2 : enteredScore;
+
+      return {
+        ...player,
+        score: player.score + appliedScore,
+        lastRoundScore: appliedScore,
+      };
     });
 
-    setPlayers(newPlayers);
-    setWinnerIndex(null);
-    setWinnerType(null);
-    setRoundScores({});
-    setCurrentShuffler(prev => (prev===0?newPlayers.length-1:prev-1));
-    setRoundNumber(prev=>prev+1);
+    setPlayers(nextPlayers);
+    setCurrentShufflerIndex((prev) => (prev + 1) % nextPlayers.length);
+    setRoundNumber((prev) => prev + 1);
+    resetRoundInputs();
+    setGameView('roundSetup');
+  };
+
+  const removePlayer = (playerId) => {
+    const player = players.find((item) => item.id === playerId);
+    if (!player) return;
+
+    const confirmed = window.confirm(
+      `Are you sure you want to remove ${player.name} from this game?`,
+    );
+
+    if (!confirmed) return;
+
+    const removedIndex = players.findIndex((item) => item.id === playerId);
+    const remainingPlayers = players.filter((item) => item.id !== playerId);
+
+    if (remainingPlayers.length === 0) {
+      clearGameState();
+      return;
+    }
+
+    if (remainingPlayers.length === 1) {
+      const winner = remainingPlayers[0];
+      setPlayers(remainingPlayers);
+      setGameWinner({ name: winner.name, score: winner.score });
+      setGameHistory((prev) => [
+        {
+          id: Date.now(),
+          createdAt: new Date().toISOString(),
+          winner: winner.name,
+          players: remainingPlayers.map((item) => ({ name: item.name, score: item.score })),
+        },
+        ...prev,
+      ]);
+      setStep('end');
+      return;
+    }
+
+    let nextShufflerIndex = currentShufflerIndex;
+    if (removedIndex < currentShufflerIndex) {
+      nextShufflerIndex -= 1;
+    } else if (removedIndex === currentShufflerIndex) {
+      nextShufflerIndex = currentShufflerIndex % remainingPlayers.length;
+    }
+
+    setPlayers(remainingPlayers);
+    setCurrentShufflerIndex(nextShufflerIndex);
+    setOpenMenuPlayerId(null);
+
+    if (winnerId === playerId) {
+      setWinnerId(null);
+      setGameView('roundSetup');
+    }
+
+    setRoundScores((prev) => {
+      const next = { ...prev };
+      delete next[playerId];
+      return next;
+    });
   };
 
   const endGame = () => {
-  const winner = players.reduce((acc, p, i) => (p.score < acc.score ? {index:i, name:p.name, score:p.score}: acc), {index:0,name:players[0].name,score:players[0].score});
-  setGameWinner(winner);
+    if (!players.length) return;
 
-  // dohvat trenutnog datuma
-  const today = new Date();
-  const dateString = today.toLocaleDateString('hr-HR', { weekday: 'long', year: 'numeric', month: 'numeric', day: 'numeric' });
+    const winner = players.reduce(
+      (best, player) => (player.score < best.score ? { name: player.name, score: player.score } : best),
+      {
+        name: players[0].name,
+        score: players[0].score,
+      },
+    );
 
-  // spremanje u povijest
-  setGameHistory(prev => [...prev, {
-    id: today.getTime(),
-    date: dateString,
-    winner: winner.name,
-    players: [...players.map(p=>({name:p.name, score:p.score}))]
-  }]);
+    setGameWinner(winner);
+    setGameHistory((prev) => [
+      {
+        id: Date.now(),
+        createdAt: new Date().toISOString(),
+        winner: winner.name,
+        players: players.map((player) => ({ name: player.name, score: player.score })),
+      },
+      ...prev,
+    ]);
+    setStep('end');
+  };
 
-  setStep('end');
-};
-
-if(showHistory){
-  return (
-    <div style={{padding:20}}>
-      <h1 style={{textAlign:'center',marginBottom:15}}>Game History</h1>
-      {gameHistory.length === 0 && <p style={{textAlign:'center'}}>No games played yet.</p>}
-      {gameHistory.map((game,i)=>(
-        <div key={game.id} style={{marginBottom:10,border:'1px solid #ccc',borderRadius:6,padding:10}}>
-          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-            <span style={{fontWeight:'bold'}}>{game.date}</span>
-            <button onClick={()=>setExpandedGameIndex(expandedGameIndex===i?null:i)}
-              style={{padding:4,fontSize:12,borderRadius:4,border:'none',backgroundColor:'#ccc'}}>
-              {expandedGameIndex===i ? 'Hide' : 'Show'}
+  if (showHistory) {
+    return (
+      <div className="app-shell">
+        <div className="screen-card history-screen">
+          <div className="history-header">
+            <div>
+              <p className="eyebrow">Archive</p>
+              <h1>Game history</h1>
+            </div>
+            <button className="secondary-button" onClick={() => setShowHistory(false)}>
+              Back
             </button>
           </div>
-          {expandedGameIndex===i && (
-            <div style={{marginTop:6,paddingLeft:10}}>
-              <p><strong>Winner:</strong> {game.winner}</p>
-              {game.players.map((p,j)=>(
-                <p key={j} style={{fontSize:14}}>{p.name}: {p.score} points</p>
-              ))}
+
+          {gameHistory.length === 0 ? (
+            <div className="empty-state">No archived games yet.</div>
+          ) : (
+            <div className="history-list">
+              {gameHistory.map((game) => {
+                const expanded = expandedHistoryId === game.id;
+                return (
+                  <div key={game.id} className="history-item">
+                    <button
+                      className="history-item__summary"
+                      onClick={() => setExpandedHistoryId(expanded ? null : game.id)}
+                    >
+                      <div>
+                        <div className="history-item__winner">Winner: {game.winner}</div>
+                        <div className="history-item__date">{formatDate(game.createdAt)}</div>
+                      </div>
+                      <span>{expanded ? 'Hide' : 'Show'}</span>
+                    </button>
+                    {expanded && (
+                      <div className="history-item__details">
+                        {game.players.map((player) => (
+                          <div key={`${game.id}-${player.name}`} className="history-player-row">
+                            <span>{player.name}</span>
+                            <strong>{player.score}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
-      ))}
-      <button onClick={()=>setShowHistory(false)} style={{
-        padding:10,fontSize:16,borderRadius:8,backgroundColor:'#ff6b6b',color:'#fff',
-        border:'none',width:'50%',fontWeight:'bold',marginTop:20
-      }}>Back</button>
-    </div>
-  )
-}
-
-  // ---------- Setup Screen ----------
-  if(step==='setup'){
-    return (
-      <div style={{
-        padding:15,
-        display:'flex',
-        flexDirection:'column',
-        justifyContent:'center',
-        alignItems:'center',
-        height:'100vh',
-        background:'linear-gradient(180deg, #667eea 0%, #764ba2 100%)'
-      }}>
-        {/* History button ispod naslova */}
-
-        <h1 style={{marginBottom:30,color:'',fontSize:60,fontWeight:'bold'}}>REMI</h1>
-        <button onClick={()=>setShowHistory(true)} style={{
-  marginBottom:15,
-  padding:'8px 16px',
-  fontSize:14,
-  borderRadius:6,
-  backgroundColor:'#8e44ad', // tamnija ljubičasta
-  color:'#fff',
-  border:'none',
-  fontWeight:'bold',
-  boxShadow:'0 2px 4px rgba(0,0,0,0.2)',
-  cursor:'pointer',
-  transition:'transform 0.1s, box-shadow 0.1s'
-}}
-onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.05)'; e.currentTarget.style.boxShadow='0 4px 6px rgba(0,0,0,0.3)';}}
-onMouseLeave={e=>{e.currentTarget.style.transform='scale(1)'; e.currentTarget.style.boxShadow='0 2px 4px rgba(0,0,0,0.2)';}}
->History</button>
-        <select value={numPlayers} onChange={(e)=>setNumPlayers(Number(e.target.value))} 
-          style={{width:'80%',padding:8,fontSize:14,marginBottom:8,borderRadius:6,border:'none',background:'#f0f0f0',color:'black'}}>
-          {[2,3,4,5,6].map(n=><option key={n} value={n}>{n} Players</option>)}
-        </select>
-
-        {[...Array(numPlayers)].map((_,i)=>(
-          <input key={i} placeholder={`Player ${i+1} Name`} value={playerNames[i]||''} 
-            onChange={(e)=>{const n=[...playerNames];n[i]=e.target.value;setPlayerNames(n)}} 
-            style={{width:'80%',padding:8,fontSize:14,marginBottom:6,borderRadius:6,border:'none',background:'#f0f0f0',color:'black' }}/>
-        ))}
-
-        <button onClick={startGame} style={{
-          marginTop:10,padding:10,fontSize:16,borderRadius:8,backgroundColor:'#ff6b6b',color:'#fff',
-          border:'none',width:'80%',fontWeight:'bold',boxShadow:'0 4px 6px rgba(0,0,0,0.2)'
-        }}>Start Game</button>
       </div>
-    )
+    );
   }
 
-  // ---------- End Screen ----------
-  if(step==='end'){
-  // sortiramo sve igrače po bodovima (najmanje prvo)
-  const sortedPlayers = [...players].sort((a,b)=>a.score - b.score);
+  if (step === 'setup') {
+    return (
+      <div className="app-shell">
+        <div className="screen-card setup-screen">
+          <p className="eyebrow">Score tracker</p>
+          <h1>Remi</h1>
+          <p className="subtitle">Create the table, pick the first shuffler, and track every round cleanly.</p>
 
-  return (
-    <div style={{
-      display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center',
-      height:'100vh', background:'linear-gradient(180deg, #667eea 0%, #764ba2 100%)',
-      color:'#fff', textAlign:'center', padding:20
-    }}>
-      <h1 style={{fontSize:24,fontWeight:'bold',marginBottom:10}}>Pobjednik je:</h1>
-      <h2 style={{fontSize:28,fontWeight:'bold',marginBottom:20}}>{gameWinner.name}</h2>
+          <div className="top-actions">
+            <button className="secondary-button" onClick={() => setShowHistory(true)}>
+              View history
+            </button>
+          </div>
 
-      {/* Lista svih igrača */}
-      <div style={{marginTop:10, width:'80%'}}>
-        {sortedPlayers.map((p,i)=>(
-          <p key={i} style={{
-            fontSize:i===0 ? 22 : 14,
-            fontWeight:i===0 ? 'bold' : 'normal',
-            margin:3
-          }}>
-            {i+1}. {p.name} - {p.score} poena
-          </p>
-        ))}
+          <label className="field-label">
+            Players
+            <select
+              className="app-select"
+              value={numPlayers}
+              onChange={(event) => setNumPlayers(Number(event.target.value))}
+            >
+              {[2, 3, 4, 5, 6].map((count) => (
+                <option key={count} value={count}>
+                  {count} players
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="name-grid">
+            {Array.from({ length: numPlayers }).map((_, index) => (
+              <label key={index} className="field-label">
+                Player {index + 1}
+                <input
+                  className="app-input"
+                  type="text"
+                  placeholder={`Enter player ${index + 1} name`}
+                  value={playerNames[index] || ''}
+                  onChange={(event) => {
+                    const next = [...playerNames];
+                    next[index] = event.target.value;
+                    setPlayerNames(next);
+                  }}
+                />
+              </label>
+            ))}
+          </div>
+
+          <button className="primary-button" onClick={beginGameSetup}>
+            Start game
+          </button>
+        </div>
       </div>
+    );
+  }
 
-      {/* Back - resetira sve */}
-      
+  if (step === 'chooseShuffler') {
+    return (
+      <div className="app-shell">
+        <div className="screen-card choose-screen">
+          <p className="eyebrow">Before round 1</p>
+          <h1>Choose the first shuffler</h1>
+          <p className="subtitle">
+            The shuffler will then rotate in the same order as the player list for every next round.
+          </p>
 
-      {/* Cancel - vraća u igru */}
-      <button onClick={()=>{
-        setStep('game'); // samo se vraćamo u igru
-        setGameWinner(null); // maknemo end screen
-      }} style={{
-        padding:12,fontSize:16,borderRadius:8,backgroundColor:'#999',color:'#fff',
-        border:'none',width:'60%',fontWeight:'bold',boxShadow:'0 4px 6px rgba(0,0,0,0.2)',
-        marginTop:30
-      }}>Cancel</button>
-      <button onClick={()=>{
-        setStep('setup');
-        setPlayerNames([]);
-        setPlayers([]);
-        setCurrentShuffler(0);
-        setWinnerIndex(null);
-        setWinnerType(null);
-        setRoundScores({});
-        setRoundNumber(1);
-        setGameWinner(null);
-      }} style={{
-        padding:12,fontSize:16,borderRadius:8,backgroundColor:'#ff6b6b',color:'#fff',
-        border:'none',width:'60%',fontWeight:'bold',boxShadow:'0 4px 6px rgba(0,0,0,0.2)',
-        marginTop:10
-      }}>Home</button>
-    </div>
-  )
-}
+          <div className="shuffler-picker">
+            {pendingPlayers.map((player, index) => (
+              <button
+                key={player.id}
+                className="picker-button"
+                onClick={() => confirmFirstShuffler(index)}
+              >
+                {player.name}
+              </button>
+            ))}
+          </div>
 
-  // ---------- Game Screen ----------
-  return (
-    <div style={{
-      padding:5,
-      display:'flex',
-      flexDirection:'column',
-      alignItems:'center',
-      minHeight:'100vh',
-      background:'linear-gradient(180deg, #667eea 0%, #764ba2 100%)'
-    }}>
-      <h1 style={{margin:3,color:'#fff',fontSize:22,fontWeight:'bold'}}>REMI Game</h1>
-      <h2 style={{margin:2,color:'#f0f0f0',fontSize:14}}>
-        Shuffler: {players[currentShuffler].name} | Round: {roundNumber}
-      </h2>
+          <button className="secondary-button" onClick={() => setStep('setup')}>
+            Back
+          </button>
+        </div>
+      </div>
+    );
+  }
 
-      {/* Grid 2 po redu */}
-      <div style={{
-        display:'flex',
-        flexWrap:'wrap',
-        justifyContent:'space-between',
-        width:'100%',
-        marginTop:8,
-        boxSizing:'border-box'
-      }}>
-        {players.map((p,i)=>( 
-          <div key={i} style={{
-            flex:'0 0 49%', 
-            boxSizing:'border-box',
-            marginBottom:8,
-            background:'#fff',
-            borderRadius:10,
-            padding:8,
-            display:'flex',
-            flexDirection:'column',
-            justifyContent:'space-between',
-            height:160,
-            overflow:'hidden',
-            boxShadow:'0 2px 6px rgba(0,0,0,0.2)',
-            transition:'transform 0.2s'
-          }}>
-            <div style={{display:'flex', justifyContent:'space-between', width:'100%', marginBottom:8}}>
-              <div style={{display:'flex', flexDirection:'column', alignItems:'flex-start', gap:2, flex:'0 0 45%'}}>
-                <h3 style={{margin:0,fontSize:18,fontWeight:'bold'}}>{p.name}</h3>
-                <p style={{margin:0,fontSize:18}}>Total: {p.score}</p>
-                <p style={{margin:0,fontSize:18}}>Last: {p.lastRoundScore}</p>
+  if (step === 'end' && gameWinner) {
+    return (
+      <div className="app-shell">
+        <div className="screen-card end-screen">
+          <p className="eyebrow">Game finished</p>
+          <h1>{gameWinner.name} wins</h1>
+          <p className="winner-score">Best score: {gameWinner.score}</p>
+
+          <div className="leaderboard">
+            {sortedLeaderboard.map((player, index) => (
+              <div key={player.id} className={`leaderboard-row ${index === 0 ? 'leaderboard-row--winner' : ''}`}>
+                <span>
+                  {index + 1}. {player.name}
+                </span>
+                <strong>{player.score}</strong>
               </div>
+            ))}
+          </div>
 
-              <div style={{display:'flex', flexDirection:'column', gap:6, flex:'0 0 50%', alignItems:'center', justifyContent:'center'}}>
-                <button style={{
-                  padding:14,borderRadius:6,border:'none',width:'80%',
-                  backgroundColor:winnerIndex===i&&winnerType==='normal'?'#4caf50':'#c8e6c9',
-                  fontWeight:'bold',fontSize:16,color:'#000'
-                }} onClick={()=>{setWinnerIndex(i);setWinnerType('normal')}}>-40</button>
+          <div className="end-actions end-actions--spaced">
+            <button className="secondary-button" onClick={() => setStep('game')}>
+              Back to game
+            </button>
+            <button className="primary-button" onClick={confirmGoHome}>
+              Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-                <button style={{
-                  padding:14,borderRadius:6,border:'none',width:'80%',
-                  backgroundColor:winnerIndex===i&&winnerType==='hand'?'#f44336':'#ffcdd2',
-                  fontWeight:'bold',fontSize:16,color:'#000'
-                }} onClick={()=>{setWinnerIndex(i);setWinnerType('hand')}}>-100</button>
+  if (gameView === 'roundSetup') {
+    return (
+      <div className="app-shell">
+        <div className="screen-card round-setup-screen">
+          <div className="game-header game-header--stacked">
+            <div>
+              <p className="eyebrow">Round {roundNumber}</p>
+              <h1>Choose winner</h1>
+              <p className="subtitle">Shuffler: <strong>{currentShuffler?.name}</strong></p>
+            </div>
+            <button className="danger-primary-button" onClick={endGame}>
+              End game
+            </button>
+          </div>
+
+          <div className="winner-panel winner-panel--compact">
+            <div className="winner-panel__section">
+              <span className="section-title">Who won this round?</span>
+              <div className="chip-list">
+                {players.map((player) => (
+                  <button
+                    key={player.id}
+                    className={`chip-button ${winnerId === player.id ? 'chip-button--active' : ''}`}
+                    onClick={() => setWinnerId(player.id)}
+                  >
+                    {player.name}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {i!==winnerIndex && (
-              <input type="number" placeholder="Score" value={roundScores[i]||''} 
-                onChange={(e)=>setRoundScores({...roundScores,[i]:e.target.value})} 
-                style={{
-                  width:'100%',
-                  padding:10,
-                  borderRadius:6,
-                  border:'1px solid #ccc',
-                  fontSize:16,
-                  textAlign:'center',
-                  boxSizing:'border-box'
-                }}
-              />
-            )}
+            <div className="winner-panel__section">
+              <span className="section-title">Finish type</span>
+              <div className="chip-list">
+                <button
+                  className={`chip-button ${winnerType === 'regular' ? 'chip-button--active' : ''}`}
+                  onClick={() => setWinnerType('regular')}
+                >
+                  Regular (-40)
+                </button>
+                <button
+                  className={`chip-button ${winnerType === 'hand' ? 'chip-button--active' : ''}`}
+                  onClick={() => setWinnerType('hand')}
+                >
+                  Hand (-100, others x2)
+                </button>
+              </div>
+            </div>
           </div>
-        ))}
+
+          <button className="primary-button primary-button--wide" onClick={proceedToRoundScores}>
+            Continue
+          </button>
+        </div>
       </div>
+    );
+  }
 
-      <button onClick={applyRound} style={{
-        marginTop:15,padding:8,fontSize:14,borderRadius:8,backgroundColor:'#4caf50',color:'#fff',
-        border:'none',width:'90%',fontWeight:'bold',boxShadow:'0 4px 6px rgba(0,0,0,0.2)'
-      }}>Apply Round</button>
+  return (
+    <div className="app-shell app-shell--scores">
+      <div className="screen-card game-screen game-screen--scores">
+        <div className="round-summary-card">
+          <div>
+            <p className="eyebrow">Round {roundNumber}</p>
+            <h2>{players.find((player) => player.id === winnerId)?.name || 'Winner'}</h2>
+            <p className="subtitle subtitle--dark">
+              {winnerType === 'hand' ? 'Hand finish (-100, others x2)' : 'Regular finish (-40)'}
+            </p>
+          </div>
+          <div className="round-summary-card__shuffler">
+            Shuffler<br />
+            <strong>{currentShuffler?.name}</strong>
+          </div>
+        </div>
 
-      {/* End Game button */}
-      <button onClick={endGame} style={{
-        marginTop:15,padding:8,fontSize:14,borderRadius:8,backgroundColor:'#ff6b6b',color:'#fff',
-        border:'none',width:'90%',fontWeight:'bold',boxShadow:'0 4px 6px rgba(0,0,0,0.2)'
-      }}>End Game</button>
+        <div className={`player-grid ${players.length >= 6 ? 'player-grid--scroll' : 'player-grid--fit'}`}>
+          {players.map((player) => {
+            const isWinner = player.id === winnerId;
+            const winnerPreview = isWinner ? (winnerType === 'hand' ? '-100' : '-40') : '—';
+            const roundPreview = !isWinner
+              ? Number(roundScores[player.id] || 0) * (winnerType === 'hand' ? 2 : 1)
+              : winnerPreview;
+
+            return (
+              <section key={player.id} className="player-card player-card--compact">
+                <div className="player-card__top">
+                  <div className="player-card__heading">
+                    <h2>{player.name}</h2>
+                    <p className="player-meta">Total: {player.score}</p>
+                    <p className="player-meta">Last: {player.lastRoundScore}</p>
+                  </div>
+
+                  <div className="player-menu">
+                    <button
+                      className="menu-trigger"
+                      aria-label={`Open player actions for ${player.name}`}
+                      onClick={() => setOpenMenuPlayerId((current) => (current === player.id ? null : player.id))}
+                    >
+                      ⋯
+                    </button>
+                    {openMenuPlayerId === player.id && (
+                      <div className="player-menu__dropdown">
+                        <button
+                          className="player-menu__delete"
+                          onClick={() => removePlayer(player.id)}
+                        >
+                          Remove player
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <label className="field-label field-label--compact">
+                  Score
+                  <input
+                    className="score-input score-input--compact"
+                    type="number"
+                    inputMode="numeric"
+                    placeholder={isWinner ? 'Auto' : 'Enter'}
+                    disabled={isWinner}
+                    value={isWinner ? '' : roundScores[player.id] || ''}
+                    onChange={(event) => setScoreForPlayer(player.id, event.target.value)}
+                  />
+                </label>
+
+                <div className="round-preview round-preview--compact">
+                  <span>This round</span>
+                  <strong>{roundPreview}</strong>
+                </div>
+              </section>
+            );
+          })}
+        </div>
+
+        <div className="bottom-actions bottom-actions--centered bottom-actions--spaced">
+          <button className="primary-button" onClick={applyRound}>
+            Apply round
+          </button>
+        </div>
+      </div>
     </div>
-  )
+  );
 }
