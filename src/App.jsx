@@ -23,6 +23,7 @@ function formatDate(value) {
 
 export default function App() {
   const [step, setStep] = useState('setup');
+  const [gameView, setGameView] = useState('roundSetup');
   const [numPlayers, setNumPlayers] = useState(2);
   const [playerNames, setPlayerNames] = useState(['', '']);
   const [players, setPlayers] = useState([]);
@@ -35,6 +36,7 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [expandedHistoryId, setExpandedHistoryId] = useState(null);
   const [pendingPlayers, setPendingPlayers] = useState([]);
+  const [openMenuPlayerId, setOpenMenuPlayerId] = useState(null);
   const [gameHistory, setGameHistory] = useState(() => {
     try {
       const stored = localStorage.getItem(HISTORY_KEY);
@@ -67,16 +69,24 @@ export default function App() {
     setWinnerId(null);
     setWinnerType('regular');
     setRoundScores({});
+    setOpenMenuPlayerId(null);
   };
 
-  const returnToHome = () => {
+  const clearGameState = () => {
     setStep('setup');
+    setGameView('roundSetup');
     setPlayers([]);
     setPendingPlayers([]);
     setCurrentShufflerIndex(0);
     setRoundNumber(1);
     setGameWinner(null);
     resetRoundInputs();
+  };
+
+  const confirmGoHome = () => {
+    const confirmed = window.confirm('Are you sure you want to go home? Current game progress will stay only if you finish the game first.');
+    if (!confirmed) return;
+    clearGameState();
   };
 
   const beginGameSetup = () => {
@@ -98,7 +108,17 @@ export default function App() {
     setCurrentShufflerIndex(playerIndex);
     setRoundNumber(1);
     resetRoundInputs();
+    setGameView('roundSetup');
     setStep('game');
+  };
+
+  const proceedToRoundScores = () => {
+    if (!winnerId) {
+      alert('Select the winner first.');
+      return;
+    }
+
+    setGameView('roundScores');
   };
 
   const setScoreForPlayer = (playerId, value) => {
@@ -108,6 +128,7 @@ export default function App() {
   const applyRound = () => {
     if (!winnerId) {
       alert('Select the winner first.');
+      setGameView('roundSetup');
       return;
     }
 
@@ -135,6 +156,7 @@ export default function App() {
     setCurrentShufflerIndex((prev) => (prev + 1) % nextPlayers.length);
     setRoundNumber((prev) => prev + 1);
     resetRoundInputs();
+    setGameView('roundSetup');
   };
 
   const removePlayer = (playerId) => {
@@ -151,7 +173,7 @@ export default function App() {
     const remainingPlayers = players.filter((item) => item.id !== playerId);
 
     if (remainingPlayers.length === 0) {
-      returnToHome();
+      clearGameState();
       return;
     }
 
@@ -181,9 +203,11 @@ export default function App() {
 
     setPlayers(remainingPlayers);
     setCurrentShufflerIndex(nextShufflerIndex);
+    setOpenMenuPlayerId(null);
 
     if (winnerId === playerId) {
       setWinnerId(null);
+      setGameView('roundSetup');
     }
 
     setRoundScores((prev) => {
@@ -196,12 +220,13 @@ export default function App() {
   const endGame = () => {
     if (!players.length) return;
 
-    const winner = players.reduce((best, player) =>
-      player.score < best.score ? { name: player.name, score: player.score } : best,
-    {
-      name: players[0].name,
-      score: players[0].score,
-    });
+    const winner = players.reduce(
+      (best, player) => (player.score < best.score ? { name: player.name, score: player.score } : best),
+      {
+        name: players[0].name,
+        score: players[0].score,
+      },
+    );
 
     setGameWinner(winner);
     setGameHistory((prev) => [
@@ -373,11 +398,11 @@ export default function App() {
             ))}
           </div>
 
-          <div className="end-actions">
+          <div className="end-actions end-actions--spaced">
             <button className="secondary-button" onClick={() => setStep('game')}>
               Back to game
             </button>
-            <button className="primary-button" onClick={returnToHome}>
+            <button className="primary-button" onClick={confirmGoHome}>
               Home
             </button>
           </div>
@@ -386,56 +411,82 @@ export default function App() {
     );
   }
 
-  return (
-    <div className="app-shell">
-      <div className="screen-card game-screen">
-        <div className="game-header">
-          <div>
-            <p className="eyebrow">Round {roundNumber}</p>
-            <h1>Remi game</h1>
-            <p className="subtitle">Current shuffler: <strong>{currentShuffler?.name}</strong></p>
+  if (gameView === 'roundSetup') {
+    return (
+      <div className="app-shell">
+        <div className="screen-card round-setup-screen">
+          <div className="game-header game-header--stacked">
+            <div>
+              <p className="eyebrow">Round {roundNumber}</p>
+              <h1>Choose winner</h1>
+              <p className="subtitle">Shuffler: <strong>{currentShuffler?.name}</strong></p>
+            </div>
+            <button className="danger-primary-button" onClick={endGame}>
+              End game
+            </button>
           </div>
-          <button className="secondary-button" onClick={endGame}>
-            End game
+
+          <div className="winner-panel winner-panel--compact">
+            <div className="winner-panel__section">
+              <span className="section-title">Who won this round?</span>
+              <div className="chip-list">
+                {players.map((player) => (
+                  <button
+                    key={player.id}
+                    className={`chip-button ${winnerId === player.id ? 'chip-button--active' : ''}`}
+                    onClick={() => setWinnerId(player.id)}
+                  >
+                    {player.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="winner-panel__section">
+              <span className="section-title">Finish type</span>
+              <div className="chip-list">
+                <button
+                  className={`chip-button ${winnerType === 'regular' ? 'chip-button--active' : ''}`}
+                  onClick={() => setWinnerType('regular')}
+                >
+                  Regular (-40)
+                </button>
+                <button
+                  className={`chip-button ${winnerType === 'hand' ? 'chip-button--active' : ''}`}
+                  onClick={() => setWinnerType('hand')}
+                >
+                  Hand (-100, others x2)
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <button className="primary-button primary-button--wide" onClick={proceedToRoundScores}>
+            Continue
           </button>
         </div>
+      </div>
+    );
+  }
 
-        <div className="winner-panel">
-          <div className="winner-panel__section">
-            <span className="section-title">Winner</span>
-            <div className="chip-list">
-              {players.map((player) => (
-                <button
-                  key={player.id}
-                  className={`chip-button ${winnerId === player.id ? 'chip-button--active' : ''}`}
-                  onClick={() => setWinnerId(player.id)}
-                >
-                  {player.name}
-                </button>
-              ))}
-            </div>
+  return (
+    <div className="app-shell app-shell--scores">
+      <div className="screen-card game-screen game-screen--scores">
+        <div className="round-summary-card">
+          <div>
+            <p className="eyebrow">Round {roundNumber}</p>
+            <h2>{players.find((player) => player.id === winnerId)?.name || 'Winner'}</h2>
+            <p className="subtitle subtitle--dark">
+              {winnerType === 'hand' ? 'Hand finish (-100, others x2)' : 'Regular finish (-40)'}
+            </p>
           </div>
-
-          <div className="winner-panel__section">
-            <span className="section-title">Finish type</span>
-            <div className="chip-list">
-              <button
-                className={`chip-button ${winnerType === 'regular' ? 'chip-button--active' : ''}`}
-                onClick={() => setWinnerType('regular')}
-              >
-                Regular (-40)
-              </button>
-              <button
-                className={`chip-button ${winnerType === 'hand' ? 'chip-button--active' : ''}`}
-                onClick={() => setWinnerType('hand')}
-              >
-                Hand finish (-100, others x2)
-              </button>
-            </div>
+          <div className="round-summary-card__shuffler">
+            Shuffler<br />
+            <strong>{currentShuffler?.name}</strong>
           </div>
         </div>
 
-        <div className="player-grid">
+        <div className={`player-grid ${players.length >= 6 ? 'player-grid--scroll' : 'player-grid--fit'}`}>
           {players.map((player) => {
             const isWinner = player.id === winnerId;
             const winnerPreview = isWinner ? (winnerType === 'hand' ? '-100' : '-40') : '—';
@@ -444,35 +495,49 @@ export default function App() {
               : winnerPreview;
 
             return (
-              <section key={player.id} className="player-card">
+              <section key={player.id} className="player-card player-card--compact">
                 <div className="player-card__top">
-                  <div>
+                  <div className="player-card__heading">
                     <h2>{player.name}</h2>
-                    <p className="player-meta">Total score: {player.score}</p>
-                    <p className="player-meta">Last round: {player.lastRoundScore}</p>
+                    <p className="player-meta">Total: {player.score}</p>
+                    <p className="player-meta">Last: {player.lastRoundScore}</p>
                   </div>
-                  <button
-                    className="danger-button"
-                    onClick={() => removePlayer(player.id)}
-                  >
-                    Remove
-                  </button>
+
+                  <div className="player-menu">
+                    <button
+                      className="menu-trigger"
+                      aria-label={`Open player actions for ${player.name}`}
+                      onClick={() => setOpenMenuPlayerId((current) => (current === player.id ? null : player.id))}
+                    >
+                      ⋯
+                    </button>
+                    {openMenuPlayerId === player.id && (
+                      <div className="player-menu__dropdown">
+                        <button
+                          className="player-menu__delete"
+                          onClick={() => removePlayer(player.id)}
+                        >
+                          Remove player
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                <label className="field-label">
-                  Round score
+                <label className="field-label field-label--compact">
+                  Score
                   <input
-                    className="score-input"
+                    className="score-input score-input--compact"
                     type="number"
                     inputMode="numeric"
-                    placeholder={isWinner ? 'Winner auto score' : 'Enter score'}
+                    placeholder={isWinner ? 'Auto' : 'Enter'}
                     disabled={isWinner}
                     value={isWinner ? '' : roundScores[player.id] || ''}
                     onChange={(event) => setScoreForPlayer(player.id, event.target.value)}
                   />
                 </label>
 
-                <div className="round-preview">
+                <div className="round-preview round-preview--compact">
                   <span>This round</span>
                   <strong>{roundPreview}</strong>
                 </div>
@@ -481,10 +546,7 @@ export default function App() {
           })}
         </div>
 
-        <div className="bottom-actions">
-          <button className="secondary-button" onClick={returnToHome}>
-            Home
-          </button>
+        <div className="bottom-actions bottom-actions--centered bottom-actions--spaced">
           <button className="primary-button" onClick={applyRound}>
             Apply round
           </button>
