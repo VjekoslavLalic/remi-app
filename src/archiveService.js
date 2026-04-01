@@ -6,8 +6,9 @@ import {
   orderBy,
   query,
 } from 'firebase/firestore';
-import { db, isFirebaseConfigured } from './firebase';
+import { db, ensureAnonymousAuth, getCurrentUserUid, isFirebaseConfigured } from './firebase';
 
+const USERS_COLLECTION = 'users';
 const ARCHIVE_COLLECTION = 'remiArchive';
 
 function mapGame(doc) {
@@ -23,27 +24,55 @@ function mapGame(doc) {
   };
 }
 
+function getUserArchiveCollection(uid) {
+  return collection(db, USERS_COLLECTION, uid, ARCHIVE_COLLECTION);
+}
+
 export function subscribeToArchivedGames(onData, onError) {
   if (!isFirebaseConfigured || !db) {
     onData([]);
     return () => {};
   }
 
-  const archiveQuery = query(
-    collection(db, ARCHIVE_COLLECTION),
-    orderBy('createdAtMs', 'desc'),
-    limit(100),
-  );
+  let unsubscribe = () => {};
+  let active = true;
 
-  return onSnapshot(
-    archiveQuery,
-    (snapshot) => {
-      onData(snapshot.docs.map(mapGame));
-    },
-    (error) => {
+  ensureAnonymousAuth()
+    .then((user) => {
+      if (!active) return;
+
+      const uid = user?.uid || getCurrentUserUid();
+      if (!uid) {
+        onData([]);
+        return;
+      }
+
+      const archiveQuery = query(
+        getUserArchiveCollection(uid),
+        orderBy('createdAtMs', 'desc'),
+        limit(100),
+      );
+
+      unsubscribe = onSnapshot(
+        archiveQuery,
+        (snapshot) => {
+          onData(snapshot.docs.map(mapGame));
+        },
+        (error) => {
+          onError?.(error);
+        },
+      );
+    })
+    .catch((error) => {
+      if (!active) return;
       onError?.(error);
-    },
-  );
+      onData([]);
+    });
+
+  return () => {
+    active = false;
+    unsubscribe();
+  };
 }
 
 export async function saveArchivedGame(game) {
@@ -51,16 +80,24 @@ export async function saveArchivedGame(game) {
     return null;
   }
 
+  const user = await ensureAnonymousAuth();
+  const uid = user?.uid || getCurrentUserUid();
+
+  if (!uid) {
+    throw new Error('No authenticated Firebase user available for archive save.');
+  }
+
   const payload = {
     winner: game.winner,
     createdAtIso: game.createdAt,
     createdAtMs: game.createdAtMs,
     roundCount: game.roundCount,
+    ownerUid: uid,
     players: game.players.map((player) => ({
       name: player.name,
       score: Number(player.score) || 0,
     })),
   };
 
-  return addDoc(collection(db, ARCHIVE_COLLECTION), payload);
+  return addDoc(getUserArchiveCollection(uid), payload);
 }
