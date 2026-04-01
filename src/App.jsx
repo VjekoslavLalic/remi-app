@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
 import { saveArchivedGame, subscribeToArchivedGames } from './archiveService';
-import { isFirebaseConfigured } from './firebase';
+import { getFirebaseAuthErrorMessage, isFirebaseConfigured } from './firebase';
 
 const HISTORY_KEY = 'remi-history-v1';
 
@@ -39,6 +39,13 @@ function buildArchivedGame(players, winnerName, roundNumber) {
   };
 }
 
+
+function normalizeRoundScoreInput(value) {
+  return String(value || '')
+    .replace(/[^0-9]/g, '')
+    .slice(0, 4);
+}
+
 export default function App() {
   const [step, setStep] = useState('setup');
   const [gameView, setGameView] = useState('roundSetup');
@@ -49,6 +56,7 @@ export default function App() {
   const [winnerId, setWinnerId] = useState(null);
   const [winnerType, setWinnerType] = useState('regular');
   const [roundScores, setRoundScores] = useState({});
+  const [activeScorePlayerId, setActiveScorePlayerId] = useState(null);
   const [roundNumber, setRoundNumber] = useState(1);
   const [gameWinner, setGameWinner] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -85,9 +93,8 @@ export default function App() {
       },
       (error) => {
         console.error('Failed to load Firestore archive', error);
-        setCloudLoadState('error');
-        const details = error?.code ? `${error.code}: ${error.message || ''}`.trim() : (error?.message || 'Unknown Firestore error');
-        setCloudErrorMessage(`Firestore archive could not be loaded. Showing local archive only. ${details}`.trim());
+            setCloudLoadState('error');
+        setCloudErrorMessage(`Firestore archive could not be loaded. ${getFirebaseAuthErrorMessage(error)}`);
       },
     );
 
@@ -136,7 +143,7 @@ export default function App() {
     }
 
     if (cloudSaveState === 'saving') {
-      return 'Archive mode: saving to Firestore...';
+      return 'Archive mode: saving your private archive...';
     }
 
     if (cloudSaveState === 'error') {
@@ -144,14 +151,14 @@ export default function App() {
     }
 
     if (cloudLoadState === 'loading') {
-      return 'Archive mode: connecting to Firestore...';
+      return 'Archive mode: connecting to your private Firestore archive...';
     }
 
     if (cloudLoadState === 'error') {
       return 'Archive mode: Firestore unavailable, local backup only';
     }
 
-    return 'Archive mode: Firestore live';
+    return 'Archive mode: private Firestore archive live';
   }, [cloudLoadState, cloudSaveState]);
 
   const resetRoundInputs = () => {
@@ -159,6 +166,7 @@ export default function App() {
     setWinnerType('regular');
     setRoundScores({});
     setOpenMenuPlayerId(null);
+    setActiveScorePlayerId(null);
   };
 
   const clearGameState = () => {
@@ -193,8 +201,7 @@ export default function App() {
         .catch((error) => {
           console.error('Failed to save Firestore archive', error);
           setCloudSaveState('error');
-          const details = error?.code ? `${error.code}: ${error.message || ''}`.trim() : (error?.message || 'Unknown Firestore error');
-          setCloudErrorMessage(`Game was saved locally, but Firestore save failed. ${details}`.trim());
+          setCloudErrorMessage(`Game was saved locally, but Firestore save failed. ${getFirebaseAuthErrorMessage(error)}`);
         });
     }
   };
@@ -232,7 +239,25 @@ export default function App() {
   };
 
   const setScoreForPlayer = (playerId, value) => {
-    setRoundScores((prev) => ({ ...prev, [playerId]: value }));
+    setRoundScores((prev) => ({ ...prev, [playerId]: normalizeRoundScoreInput(value) }));
+  };
+
+  const getScoreInputClassName = (playerId, isWinner) => {
+    if (isWinner) {
+      return 'score-input score-input--compact score-input--auto';
+    }
+
+    const hasValue = String(roundScores[playerId] ?? '').length > 0;
+
+    if (activeScorePlayerId === playerId) {
+      return `score-input score-input--compact ${hasValue ? 'score-input--editing score-input--editing-has-value' : 'score-input--editing'}`;
+    }
+
+    if (hasValue) {
+      return 'score-input score-input--compact score-input--filled';
+    }
+
+    return 'score-input score-input--compact';
   };
 
   const applyRound = () => {
@@ -625,12 +650,21 @@ export default function App() {
                 <label className="field-label field-label--compact">
                   Score
                   <input
-                    className="score-input score-input--compact"
-                    type="number"
+                    className={getScoreInputClassName(player.id, isWinner)}
+                    type="text"
                     inputMode="numeric"
-                    placeholder={isWinner ? 'Auto' : 'Enter'}
+                    placeholder={isWinner ? '' : 'Enter'}
                     disabled={isWinner}
-                    value={isWinner ? '' : roundScores[player.id] || ''}
+                    readOnly={isWinner}
+                    value={isWinner ? 'Auto' : roundScores[player.id] || ''}
+                    onFocus={() => {
+                      if (!isWinner) setActiveScorePlayerId(player.id);
+                    }}
+                    onBlur={() => {
+                      if (activeScorePlayerId === player.id) {
+                        setActiveScorePlayerId(null);
+                      }
+                    }}
                     onChange={(event) => setScoreForPlayer(player.id, event.target.value)}
                   />
                 </label>
