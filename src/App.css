@@ -541,3 +541,20 @@ h2 {
     text-align: left;
   }
 }
+
+.archive-note {
+  margin: 8px 0 0;
+  font-size: 0.92rem;
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.archive-note--setup {
+  margin-bottom: 10px;
+}
+
+.archive-error {
+  margin: 8px 0 0;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  color: #ffd9d9;
+}
