@@ -86,7 +86,8 @@ export default function App() {
       (error) => {
         console.error('Failed to load Firestore archive', error);
         setCloudLoadState('error');
-        setCloudErrorMessage('Firestore archive could not be loaded. Showing local archive only.');
+        const details = error?.code ? `${error.code}: ${error.message || ''}`.trim() : (error?.message || 'Unknown Firestore error');
+        setCloudErrorMessage(`Firestore archive could not be loaded. Showing local archive only. ${details}`.trim());
       },
     );
 
@@ -192,7 +193,8 @@ export default function App() {
         .catch((error) => {
           console.error('Failed to save Firestore archive', error);
           setCloudSaveState('error');
-          setCloudErrorMessage('Game was saved locally, but Firestore save failed.');
+          const details = error?.code ? `${error.code}: ${error.message || ''}`.trim() : (error?.message || 'Unknown Firestore error');
+          setCloudErrorMessage(`Game was saved locally, but Firestore save failed. ${details}`.trim());
         });
     }
   };
