@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
+import { saveArchivedGame, subscribeToArchivedGames } from './archiveService';
+import { isFirebaseConfigured } from './firebase';
 
 const HISTORY_KEY = 'remi-history-v1';
 
@@ -21,6 +23,22 @@ function formatDate(value) {
   });
 }
 
+function buildArchivedGame(players, winnerName, roundNumber) {
+  const now = Date.now();
+
+  return {
+    id: now,
+    createdAt: new Date(now).toISOString(),
+    createdAtMs: now,
+    winner: winnerName,
+    roundCount: Math.max(roundNumber - 1, 0),
+    players: players.map((player) => ({
+      name: player.name,
+      score: player.score,
+    })),
+  };
+}
+
 export default function App() {
   const [step, setStep] = useState('setup');
   const [gameView, setGameView] = useState('roundSetup');
@@ -37,7 +55,11 @@ export default function App() {
   const [expandedHistoryId, setExpandedHistoryId] = useState(null);
   const [pendingPlayers, setPendingPlayers] = useState([]);
   const [openMenuPlayerId, setOpenMenuPlayerId] = useState(null);
-  const [gameHistory, setGameHistory] = useState(() => {
+  const [cloudHistory, setCloudHistory] = useState([]);
+  const [cloudLoadState, setCloudLoadState] = useState(isFirebaseConfigured ? 'loading' : 'disabled');
+  const [cloudSaveState, setCloudSaveState] = useState('idle');
+  const [cloudErrorMessage, setCloudErrorMessage] = useState('');
+  const [localHistory, setLocalHistory] = useState(() => {
     try {
       const stored = localStorage.getItem(HISTORY_KEY);
       return stored ? JSON.parse(stored) : [];
@@ -47,8 +69,29 @@ export default function App() {
   });
 
   useEffect(() => {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(gameHistory));
-  }, [gameHistory]);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(localHistory));
+  }, [localHistory]);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured) {
+      return undefined;
+    }
+
+    const unsubscribe = subscribeToArchivedGames(
+      (games) => {
+        setCloudHistory(games);
+        setCloudLoadState('ready');
+        setCloudErrorMessage('');
+      },
+      (error) => {
+        console.error('Failed to load Firestore archive', error);
+        setCloudLoadState('error');
+        setCloudErrorMessage('Firestore archive could not be loaded. Showing local archive only.');
+      },
+    );
+
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     setPlayerNames((prev) => {
@@ -64,6 +107,51 @@ export default function App() {
     () => [...players].sort((a, b) => a.score - b.score),
     [players],
   );
+
+  const gameHistory = useMemo(() => {
+    if (cloudLoadState !== 'ready') {
+      return localHistory;
+    }
+
+    const merged = [...cloudHistory, ...localHistory];
+    const seen = new Set();
+
+    return merged.filter((game) => {
+      const timestamp = game.createdAtMs || Date.parse(game.createdAt || '') || 0;
+      const key = `${timestamp}-${game.winner}-${game.players.length}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).sort((a, b) => {
+      const aTime = a.createdAtMs || Date.parse(a.createdAt || '') || 0;
+      const bTime = b.createdAtMs || Date.parse(b.createdAt || '') || 0;
+      return bTime - aTime;
+    });
+  }, [cloudHistory, cloudLoadState, localHistory]);
+
+  const archiveStatusLabel = useMemo(() => {
+    if (!isFirebaseConfigured) {
+      return 'Archive mode: local only';
+    }
+
+    if (cloudSaveState === 'saving') {
+      return 'Archive mode: saving to Firestore...';
+    }
+
+    if (cloudSaveState === 'error') {
+      return 'Archive mode: Firestore save failed, local backup kept';
+    }
+
+    if (cloudLoadState === 'loading') {
+      return 'Archive mode: connecting to Firestore...';
+    }
+
+    if (cloudLoadState === 'error') {
+      return 'Archive mode: Firestore unavailable, local backup only';
+    }
+
+    return 'Archive mode: Firestore live';
+  }, [cloudLoadState, cloudSaveState]);
 
   const resetRoundInputs = () => {
     setWinnerId(null);
@@ -87,6 +175,26 @@ export default function App() {
     const confirmed = window.confirm('Are you sure you want to go home? Current game progress will stay only if you finish the game first.');
     if (!confirmed) return;
     clearGameState();
+  };
+
+  const archiveFinishedGame = (finalPlayers, winnerName) => {
+    const archiveEntry = buildArchivedGame(finalPlayers, winnerName, roundNumber);
+
+    setLocalHistory((prev) => [archiveEntry, ...prev]);
+
+    if (isFirebaseConfigured) {
+      setCloudSaveState('saving');
+      saveArchivedGame(archiveEntry)
+        .then(() => {
+          setCloudSaveState('idle');
+          setCloudErrorMessage('');
+        })
+        .catch((error) => {
+          console.error('Failed to save Firestore archive', error);
+          setCloudSaveState('error');
+          setCloudErrorMessage('Game was saved locally, but Firestore save failed.');
+        });
+    }
   };
 
   const beginGameSetup = () => {
@@ -181,15 +289,7 @@ export default function App() {
       const winner = remainingPlayers[0];
       setPlayers(remainingPlayers);
       setGameWinner({ name: winner.name, score: winner.score });
-      setGameHistory((prev) => [
-        {
-          id: Date.now(),
-          createdAt: new Date().toISOString(),
-          winner: winner.name,
-          players: remainingPlayers.map((item) => ({ name: item.name, score: item.score })),
-        },
-        ...prev,
-      ]);
+      archiveFinishedGame(remainingPlayers, winner.name);
       setStep('end');
       return;
     }
@@ -229,15 +329,7 @@ export default function App() {
     );
 
     setGameWinner(winner);
-    setGameHistory((prev) => [
-      {
-        id: Date.now(),
-        createdAt: new Date().toISOString(),
-        winner: winner.name,
-        players: players.map((player) => ({ name: player.name, score: player.score })),
-      },
-      ...prev,
-    ]);
+    archiveFinishedGame(players, winner.name);
     setStep('end');
   };
 
@@ -249,6 +341,8 @@ export default function App() {
             <div>
               <p className="eyebrow">Archive</p>
               <h1>Game history</h1>
+              <p className="archive-note">{archiveStatusLabel}</p>
+              {cloudErrorMessage && <p className="archive-error">{cloudErrorMessage}</p>}
             </div>
             <button className="secondary-button" onClick={() => setShowHistory(false)}>
               Back
@@ -300,6 +394,8 @@ export default function App() {
           <p className="eyebrow">Score tracker</p>
           <h1>Remi</h1>
           <p className="subtitle">Create the table, pick the first shuffler, and track every round cleanly.</p>
+          <p className="archive-note archive-note--setup">{archiveStatusLabel}</p>
+          {cloudErrorMessage && <p className="archive-error">{cloudErrorMessage}</p>}
 
           <div className="top-actions">
             <button className="secondary-button" onClick={() => setShowHistory(true)}>
@@ -403,7 +499,7 @@ export default function App() {
               Back to game
             </button>
             <button className="primary-button" onClick={confirmGoHome}>
-              End game
+              Home
             </button>
           </div>
         </div>
@@ -422,7 +518,7 @@ export default function App() {
               <p className="subtitle">Shuffler: <strong>{currentShuffler?.name}</strong></p>
             </div>
             <button className="danger-primary-button" onClick={endGame}>
-              Game Status
+              End game
             </button>
           </div>
 
