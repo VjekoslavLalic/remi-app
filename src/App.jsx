@@ -782,7 +782,7 @@ export default function App() {
               <p className="subtitle">Shuffler: <strong>{currentShuffler?.name}</strong></p>
             </div>
             <button className="danger-primary-button" onClick={endGame}>
-              End game
+              Status
             </button>
           </div>
 
