@@ -613,50 +613,85 @@ h2 {
   cursor: pointer;
 }
 
-.account-sheet-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 45;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  padding: 56px 14px 14px;
-  background: rgba(10, 12, 28, 0.22);
+.account-screen {
+  padding: 22px 18px;
 }
 
-.account-sheet {
-  width: min(360px, calc(100vw - 28px));
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.98);
-  color: #1a1735;
-  box-shadow: 0 18px 32px rgba(8, 10, 25, 0.22);
-  border: 1px solid rgba(215, 220, 255, 0.8);
-  padding: 16px;
-}
-
-.account-sheet__header {
+.account-screen__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.account-sheet__close {
-  width: 30px;
-  height: 30px;
+.account-screen__close {
+  width: 36px;
+  height: 36px;
   border: none;
   border-radius: 999px;
-  background: #f1f3ff;
-  color: #363f8f;
-  font-size: 1.1rem;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-size: 1.35rem;
   line-height: 1;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
-.account-sheet__actions {
+.account-screen__body {
   display: grid;
-  gap: 10px;
-  margin-top: 14px;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.account-screen__card {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #1a1735;
+  box-shadow: 0 12px 24px rgba(10, 12, 32, 0.12);
+}
+
+.auth-action-button {
+  width: 100%;
+  min-height: 48px;
+  border: none;
+  border-radius: 14px;
+  padding: 0 18px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+}
+
+.auth-action-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(8, 10, 25, 0.18);
+}
+
+.auth-action-button--google,
+.secondary-button.auth-button--google,
+.auth-button.auth-button--google {
+  background: linear-gradient(135deg, #5d74ff, #6b4dff);
+  color: #ffffff;
+  border: 1px solid rgba(93, 116, 255, 0.35);
+  box-shadow: 0 10px 18px rgba(84, 92, 214, 0.22);
+}
+
+.auth-action-button--switch,
+.secondary-button.auth-button--switch,
+.auth-button.auth-button--switch {
+  background: linear-gradient(135deg, #4a58c7, #6c3fa7);
+  color: #ffffff;
+  border: 1px solid rgba(76, 88, 199, 0.24);
+  box-shadow: 0 10px 18px rgba(58, 45, 120, 0.22);
+}
+
+.auth-action-button:disabled,
+.secondary-button.auth-button--google:disabled,
+.secondary-button.auth-button--switch:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
 .setup-screen .top-actions {
@@ -679,8 +714,8 @@ h2 {
     height: 34px;
   }
 
-  .account-sheet-overlay {
-    padding: 50px 10px 10px;
+  .account-screen {
+    padding: 18px 14px;
   }
 
   .screen-card {
