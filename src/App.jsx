@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
 import { saveArchivedGame, subscribeToArchivedGames } from './archiveService';
-import { isFirebaseConfigured } from './firebase';
+import {
+  getFirebaseAuthErrorMessage,
+  isFirebaseConfigured,
+  onRemiAuthStateChange,
+  signInAsGuest,
+  signInWithGoogle,
+  signOutFromRemi,
+  waitForAuthInit,
+} from './firebase';
 
 const HISTORY_KEY = 'remi-history-v1';
 
@@ -39,6 +47,12 @@ function buildArchivedGame(players, winnerName, roundNumber) {
   };
 }
 
+function normalizeRoundScoreInput(value) {
+  return String(value || '')
+    .replace(/[^0-9]/g, '')
+    .slice(0, 4);
+}
+
 export default function App() {
   const [step, setStep] = useState('setup');
   const [gameView, setGameView] = useState('roundSetup');
@@ -49,6 +63,7 @@ export default function App() {
   const [winnerId, setWinnerId] = useState(null);
   const [winnerType, setWinnerType] = useState('regular');
   const [roundScores, setRoundScores] = useState({});
+  const [activeScorePlayerId, setActiveScorePlayerId] = useState(null);
   const [roundNumber, setRoundNumber] = useState(1);
   const [gameWinner, setGameWinner] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -56,9 +71,13 @@ export default function App() {
   const [pendingPlayers, setPendingPlayers] = useState([]);
   const [openMenuPlayerId, setOpenMenuPlayerId] = useState(null);
   const [cloudHistory, setCloudHistory] = useState([]);
-  const [cloudLoadState, setCloudLoadState] = useState(isFirebaseConfigured ? 'loading' : 'disabled');
+  const [cloudLoadState, setCloudLoadState] = useState(isFirebaseConfigured ? 'disabled' : 'disabled');
   const [cloudSaveState, setCloudSaveState] = useState('idle');
   const [cloudErrorMessage, setCloudErrorMessage] = useState('');
+  const [authUser, setAuthUser] = useState(null);
+  const [authState, setAuthState] = useState(isFirebaseConfigured ? 'loading' : 'disabled');
+  const [authActionState, setAuthActionState] = useState('idle');
+  const [showAccountSheet, setShowAccountSheet] = useState(false);
   const [localHistory, setLocalHistory] = useState(() => {
     try {
       const stored = localStorage.getItem(HISTORY_KEY);
@@ -77,6 +96,49 @@ export default function App() {
       return undefined;
     }
 
+    let active = true;
+    let unsubscribeAuth = () => {};
+
+    waitForAuthInit()
+      .catch((error) => {
+        if (!active) return;
+        console.error('Firebase auth bootstrap failed', error);
+        setAuthState('error');
+        setCloudErrorMessage(`Firebase sign-in setup failed. ${getFirebaseAuthErrorMessage(error)}`);
+      })
+      .finally(() => {
+        if (!active) return;
+        unsubscribeAuth = onRemiAuthStateChange((user) => {
+          if (!active) return;
+          setAuthUser(user);
+          setAuthState('ready');
+          setCloudErrorMessage('');
+
+          if (user) {
+            setCloudLoadState('loading');
+          } else {
+            setCloudHistory([]);
+            setCloudLoadState('disabled');
+          }
+        });
+      });
+
+    return () => {
+      active = false;
+      unsubscribeAuth();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured || !authUser) {
+      if (!authUser) {
+        setCloudHistory([]);
+      }
+      return undefined;
+    }
+
+    setCloudLoadState('loading');
+
     const unsubscribe = subscribeToArchivedGames(
       (games) => {
         setCloudHistory(games);
@@ -86,13 +148,12 @@ export default function App() {
       (error) => {
         console.error('Failed to load Firestore archive', error);
         setCloudLoadState('error');
-        const details = error?.code ? `${error.code}: ${error.message || ''}`.trim() : (error?.message || 'Unknown Firestore error');
-        setCloudErrorMessage(`Firestore archive could not be loaded. Showing local archive only. ${details}`.trim());
+        setCloudErrorMessage(`Firestore archive could not be loaded. ${getFirebaseAuthErrorMessage(error)}`);
       },
     );
 
     return unsubscribe;
-  }, []);
+  }, [authUser?.uid]);
 
   useEffect(() => {
     setPlayerNames((prev) => {
@@ -109,6 +170,30 @@ export default function App() {
     [players],
   );
 
+  const authModeLabel = useMemo(() => {
+    if (!isFirebaseConfigured) {
+      return 'Cloud archive is disabled until Firebase is configured.';
+    }
+
+    if (authState === 'loading') {
+      return 'Checking sign-in status...';
+    }
+
+    if (authState === 'error') {
+      return 'Sign-in setup hit a problem. Local archive stays available.';
+    }
+
+    if (!authUser) {
+      return 'Choose Guest first, or sign in with Google for cross-device archive sync.';
+    }
+
+    if (authUser.isAnonymous) {
+      return 'Signed in as Guest. This device/browser will keep the same private archive.';
+    }
+
+    return `Signed in with Google as ${authUser.displayName || authUser.email || 'your account'}.`;
+  }, [authState, authUser]);
+
   const gameHistory = useMemo(() => {
     if (cloudLoadState !== 'ready') {
       return localHistory;
@@ -117,26 +202,46 @@ export default function App() {
     const merged = [...cloudHistory, ...localHistory];
     const seen = new Set();
 
-    return merged.filter((game) => {
-      const timestamp = game.createdAtMs || Date.parse(game.createdAt || '') || 0;
-      const key = `${timestamp}-${game.winner}-${game.players.length}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).sort((a, b) => {
-      const aTime = a.createdAtMs || Date.parse(a.createdAt || '') || 0;
-      const bTime = b.createdAtMs || Date.parse(b.createdAt || '') || 0;
-      return bTime - aTime;
-    });
+    return merged
+      .filter((game) => {
+        const timestamp = game.createdAtMs || Date.parse(game.createdAt || '') || 0;
+        const key = `${timestamp}-${game.winner}-${game.players.length}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => {
+        const aTime = a.createdAtMs || Date.parse(a.createdAt || '') || 0;
+        const bTime = b.createdAtMs || Date.parse(b.createdAt || '') || 0;
+        return bTime - aTime;
+      });
   }, [cloudHistory, cloudLoadState, localHistory]);
+
+  const accountPrimaryLabel = useMemo(() => {
+    if (!authUser) return 'Not signed in';
+    if (authUser.isAnonymous) return 'Guest mode active';
+    return authUser.displayName || authUser.email || 'Google account active';
+  }, [authUser]);
 
   const archiveStatusLabel = useMemo(() => {
     if (!isFirebaseConfigured) {
       return 'Archive mode: local only';
     }
 
+    if (authState === 'loading' || authActionState !== 'idle') {
+      return 'Archive mode: preparing your private cloud archive...';
+    }
+
+    if (authState === 'error') {
+      return 'Archive mode: sign-in setup failed, local backup only';
+    }
+
+    if (!authUser) {
+      return 'Archive mode: local only until you choose Guest or Google';
+    }
+
     if (cloudSaveState === 'saving') {
-      return 'Archive mode: saving to Firestore...';
+      return 'Archive mode: saving your private archive...';
     }
 
     if (cloudSaveState === 'error') {
@@ -144,21 +249,22 @@ export default function App() {
     }
 
     if (cloudLoadState === 'loading') {
-      return 'Archive mode: connecting to Firestore...';
+      return 'Archive mode: connecting to your private Firestore archive...';
     }
 
     if (cloudLoadState === 'error') {
       return 'Archive mode: Firestore unavailable, local backup only';
     }
 
-    return 'Archive mode: Firestore live';
-  }, [cloudLoadState, cloudSaveState]);
+    return 'Archive mode: private Firestore archive live';
+  }, [authActionState, authState, authUser, cloudLoadState, cloudSaveState]);
 
   const resetRoundInputs = () => {
     setWinnerId(null);
     setWinnerType('regular');
     setRoundScores({});
     setOpenMenuPlayerId(null);
+    setActiveScorePlayerId(null);
   };
 
   const clearGameState = () => {
@@ -183,7 +289,7 @@ export default function App() {
 
     setLocalHistory((prev) => [archiveEntry, ...prev]);
 
-    if (isFirebaseConfigured) {
+    if (isFirebaseConfigured && authUser) {
       setCloudSaveState('saving');
       saveArchivedGame(archiveEntry)
         .then(() => {
@@ -193,9 +299,56 @@ export default function App() {
         .catch((error) => {
           console.error('Failed to save Firestore archive', error);
           setCloudSaveState('error');
-          const details = error?.code ? `${error.code}: ${error.message || ''}`.trim() : (error?.message || 'Unknown Firestore error');
-          setCloudErrorMessage(`Game was saved locally, but Firestore save failed. ${details}`.trim());
+          setCloudErrorMessage(`Game was saved locally, but Firestore save failed. ${getFirebaseAuthErrorMessage(error)}`);
         });
+    }
+  };
+
+  const handleGuestLogin = async () => {
+    setAuthActionState('guest');
+    setCloudErrorMessage('');
+
+    try {
+      await signInAsGuest();
+    } catch (error) {
+      console.error('Guest sign-in failed', error);
+      setCloudErrorMessage(`Guest sign-in failed. ${getFirebaseAuthErrorMessage(error)}`);
+      setAuthState('error');
+    } finally {
+      setAuthActionState('idle');
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setAuthActionState('google');
+    setCloudErrorMessage('');
+
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      console.error('Google sign-in failed', error);
+      setCloudErrorMessage(`Google sign-in failed. ${getFirebaseAuthErrorMessage(error)}`);
+      setAuthState('error');
+      setAuthActionState('idle');
+      return;
+    }
+
+    setShowAccountSheet(false);
+    setAuthActionState('idle');
+  };
+
+  const handleSignOut = async () => {
+    const confirmed = window.confirm('Sign out and switch login mode? Your private cloud archive stays saved, but this device will stop showing it until you sign in again.');
+    if (!confirmed) return;
+
+    try {
+      await signOutFromRemi();
+      setCloudSaveState('idle');
+      setCloudErrorMessage('');
+      setShowAccountSheet(false);
+    } catch (error) {
+      console.error('Sign out failed', error);
+      setCloudErrorMessage(`Sign out failed. ${getFirebaseAuthErrorMessage(error)}`);
     }
   };
 
@@ -220,6 +373,7 @@ export default function App() {
     resetRoundInputs();
     setGameView('roundSetup');
     setStep('game');
+    setShowAccountSheet(false);
   };
 
   const proceedToRoundScores = () => {
@@ -232,7 +386,25 @@ export default function App() {
   };
 
   const setScoreForPlayer = (playerId, value) => {
-    setRoundScores((prev) => ({ ...prev, [playerId]: value }));
+    setRoundScores((prev) => ({ ...prev, [playerId]: normalizeRoundScoreInput(value) }));
+  };
+
+  const getScoreInputClassName = (playerId, isWinner) => {
+    if (isWinner) {
+      return 'score-input score-input--compact score-input--auto';
+    }
+
+    const hasValue = String(roundScores[playerId] ?? '').length > 0;
+
+    if (activeScorePlayerId === playerId) {
+      return `score-input score-input--compact ${hasValue ? 'score-input--editing score-input--editing-has-value' : 'score-input--editing'}`;
+    }
+
+    if (hasValue) {
+      return 'score-input score-input--compact score-input--filled';
+    }
+
+    return 'score-input score-input--compact';
   };
 
   const applyRound = () => {
@@ -335,9 +507,88 @@ export default function App() {
     setStep('end');
   };
 
+  const renderAccountControls = () => {
+    if (!authUser) return null;
+
+    return (
+      <button
+        className="account-menu-trigger"
+        aria-label="Open account options"
+        onClick={() => setShowAccountSheet(true)}
+      >
+        ⋯
+      </button>
+    );
+  };
+
+
+  if (showAccountSheet && authUser) {
+    return (
+      <div className="app-shell">
+        <div className="screen-card account-screen">
+          <div className="account-screen__header">
+            <div>
+              <p className="eyebrow">Account</p>
+              <h1>{accountPrimaryLabel}</h1>
+              <p className="subtitle">{authModeLabel}</p>
+              <p className="archive-note">{archiveStatusLabel}</p>
+              {cloudErrorMessage && <p className="archive-error">{cloudErrorMessage}</p>}
+            </div>
+            <button className="account-screen__close" onClick={() => setShowAccountSheet(false)} aria-label="Close account screen">
+              ×
+            </button>
+          </div>
+
+          <div className="account-screen__body">
+            {authUser.isAnonymous ? (
+              <div className="account-screen__card">
+                <p className="eyebrow eyebrow--dark">Upgrade</p>
+                <h2>Continue with Google</h2>
+                <p className="subtitle subtitle--dark">
+                  Keep your archive across devices by linking your current Guest profile to Google.
+                </p>
+                <button
+                  className="auth-action-button auth-action-button--google"
+                  onClick={handleGoogleLogin}
+                  disabled={authActionState !== 'idle'}
+                >
+                  {authActionState === 'google' ? 'Opening Google sign-in…' : 'Upgrade guest to Google'}
+                </button>
+              </div>
+            ) : (
+              <div className="account-screen__card">
+                <p className="eyebrow eyebrow--dark">Connected</p>
+                <h2>Google account active</h2>
+                <p className="subtitle subtitle--dark">
+                  Your private archive will stay available anywhere you sign in with this Google account.
+                </p>
+              </div>
+            )}
+
+            <div className="account-screen__card">
+              <p className="eyebrow eyebrow--dark">Switch account</p>
+              <h2>Sign out</h2>
+              <p className="subtitle subtitle--dark">
+                Sign out if you want to switch between Guest mode and Google login.
+              </p>
+              <button
+                className="auth-action-button auth-action-button--switch"
+                onClick={handleSignOut}
+                disabled={authActionState !== 'idle'}
+              >
+                Sign out / switch account
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (showHistory) {
     return (
       <div className="app-shell">
+        {renderAccountControls()}
         <div className="screen-card history-screen">
           <div className="history-header">
             <div>
@@ -392,12 +643,47 @@ export default function App() {
   if (step === 'setup') {
     return (
       <div className="app-shell">
+        {renderAccountControls()}
         <div className="screen-card setup-screen">
           <p className="eyebrow">Score tracker</p>
           <h1>Remi</h1>
           <p className="subtitle">Create the table, pick the first shuffler, and track every round cleanly.</p>
           <p className="archive-note archive-note--setup">{archiveStatusLabel}</p>
           {cloudErrorMessage && <p className="archive-error">{cloudErrorMessage}</p>}
+
+          {!authUser && (
+            <section className="auth-panel">
+              <div className="auth-panel__copy">
+                <p className="eyebrow eyebrow--dark">Private archive</p>
+                <h2>1. Guest login</h2>
+                <p className="subtitle subtitle--dark">Recommended first. Fast start, no account needed.</p>
+                <button
+                  className="primary-button auth-button"
+                  onClick={handleGuestLogin}
+                  disabled={authActionState !== 'idle'}
+                >
+                  {authActionState === 'guest' ? 'Signing in…' : 'Continue as Guest'}
+                </button>
+
+                <div className="auth-panel__divider">or</div>
+
+                <h2>2. Google login</h2>
+                <p className="subtitle subtitle--dark">Use Google if you want the same archive across devices.</p>
+                <button
+                  className="secondary-button auth-button auth-button--google auth-button--strong"
+                  onClick={handleGoogleLogin}
+                  disabled={authActionState !== 'idle'}
+                >
+                  {authActionState === 'google' ? 'Opening Google sign-in…' : 'Continue with Google'}
+                </button>
+              </div>
+
+              <div className="auth-panel__status">
+                <span className="auth-badge">Not signed in</span>
+                <p className="auth-panel__hint">{authModeLabel}</p>
+              </div>
+            </section>
+          )}
 
           <div className="top-actions">
             <button className="secondary-button" onClick={() => setShowHistory(true)}>
@@ -450,6 +736,7 @@ export default function App() {
   if (step === 'chooseShuffler') {
     return (
       <div className="app-shell">
+        {renderAccountControls()}
         <div className="screen-card choose-screen">
           <p className="eyebrow">Before round 1</p>
           <h1>Choose the first shuffler</h1>
@@ -480,6 +767,7 @@ export default function App() {
   if (step === 'end' && gameWinner) {
     return (
       <div className="app-shell">
+        {renderAccountControls()}
         <div className="screen-card end-screen">
           <p className="eyebrow">Game finished</p>
           <h1>{gameWinner.name} wins</h1>
@@ -512,6 +800,7 @@ export default function App() {
   if (gameView === 'roundSetup') {
     return (
       <div className="app-shell">
+        {renderAccountControls()}
         <div className="screen-card round-setup-screen">
           <div className="game-header game-header--stacked">
             <div>
@@ -569,6 +858,7 @@ export default function App() {
 
   return (
     <div className="app-shell app-shell--scores">
+      {renderAccountControls()}
       <div className="screen-card game-screen game-screen--scores">
         <div className="round-summary-card">
           <div>
@@ -625,12 +915,21 @@ export default function App() {
                 <label className="field-label field-label--compact">
                   Score
                   <input
-                    className="score-input score-input--compact"
-                    type="number"
+                    className={getScoreInputClassName(player.id, isWinner)}
+                    type="text"
                     inputMode="numeric"
-                    placeholder={isWinner ? 'Auto' : 'Enter'}
+                    placeholder={isWinner ? '' : 'Enter'}
                     disabled={isWinner}
-                    value={isWinner ? '' : roundScores[player.id] || ''}
+                    readOnly={isWinner}
+                    value={isWinner ? 'Auto' : roundScores[player.id] || ''}
+                    onFocus={() => {
+                      if (!isWinner) setActiveScorePlayerId(player.id);
+                    }}
+                    onBlur={() => {
+                      if (activeScorePlayerId === player.id) {
+                        setActiveScorePlayerId(null);
+                      }
+                    }}
                     onChange={(event) => setScoreForPlayer(player.id, event.target.value)}
                   />
                 </label>
