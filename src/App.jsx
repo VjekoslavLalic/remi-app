@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
 import { saveArchivedGame, subscribeToArchivedGames } from './archiveService';
-import { getFirebaseAuthErrorMessage, isFirebaseConfigured } from './firebase';
+import {
+  getFirebaseAuthErrorMessage,
+  isFirebaseConfigured,
+  onRemiAuthStateChange,
+  signInAsGuest,
+  signInWithGoogle,
+  signOutFromRemi,
+  waitForAuthInit,
+} from './firebase';
 
 const HISTORY_KEY = 'remi-history-v1';
 
@@ -39,7 +47,6 @@ function buildArchivedGame(players, winnerName, roundNumber) {
   };
 }
 
-
 function normalizeRoundScoreInput(value) {
   return String(value || '')
     .replace(/[^0-9]/g, '')
@@ -64,9 +71,12 @@ export default function App() {
   const [pendingPlayers, setPendingPlayers] = useState([]);
   const [openMenuPlayerId, setOpenMenuPlayerId] = useState(null);
   const [cloudHistory, setCloudHistory] = useState([]);
-  const [cloudLoadState, setCloudLoadState] = useState(isFirebaseConfigured ? 'loading' : 'disabled');
+  const [cloudLoadState, setCloudLoadState] = useState(isFirebaseConfigured ? 'disabled' : 'disabled');
   const [cloudSaveState, setCloudSaveState] = useState('idle');
   const [cloudErrorMessage, setCloudErrorMessage] = useState('');
+  const [authUser, setAuthUser] = useState(null);
+  const [authState, setAuthState] = useState(isFirebaseConfigured ? 'loading' : 'disabled');
+  const [authActionState, setAuthActionState] = useState('idle');
   const [localHistory, setLocalHistory] = useState(() => {
     try {
       const stored = localStorage.getItem(HISTORY_KEY);
@@ -85,6 +95,49 @@ export default function App() {
       return undefined;
     }
 
+    let active = true;
+    let unsubscribeAuth = () => {};
+
+    waitForAuthInit()
+      .catch((error) => {
+        if (!active) return;
+        console.error('Firebase auth bootstrap failed', error);
+        setAuthState('error');
+        setCloudErrorMessage(`Firebase sign-in setup failed. ${getFirebaseAuthErrorMessage(error)}`);
+      })
+      .finally(() => {
+        if (!active) return;
+        unsubscribeAuth = onRemiAuthStateChange((user) => {
+          if (!active) return;
+          setAuthUser(user);
+          setAuthState('ready');
+          setCloudErrorMessage('');
+
+          if (user) {
+            setCloudLoadState('loading');
+          } else {
+            setCloudHistory([]);
+            setCloudLoadState('disabled');
+          }
+        });
+      });
+
+    return () => {
+      active = false;
+      unsubscribeAuth();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured || !authUser) {
+      if (!authUser) {
+        setCloudHistory([]);
+      }
+      return undefined;
+    }
+
+    setCloudLoadState('loading');
+
     const unsubscribe = subscribeToArchivedGames(
       (games) => {
         setCloudHistory(games);
@@ -93,13 +146,13 @@ export default function App() {
       },
       (error) => {
         console.error('Failed to load Firestore archive', error);
-            setCloudLoadState('error');
+        setCloudLoadState('error');
         setCloudErrorMessage(`Firestore archive could not be loaded. ${getFirebaseAuthErrorMessage(error)}`);
       },
     );
 
     return unsubscribe;
-  }, []);
+  }, [authUser?.uid]);
 
   useEffect(() => {
     setPlayerNames((prev) => {
@@ -116,6 +169,30 @@ export default function App() {
     [players],
   );
 
+  const authModeLabel = useMemo(() => {
+    if (!isFirebaseConfigured) {
+      return 'Cloud archive is disabled until Firebase is configured.';
+    }
+
+    if (authState === 'loading') {
+      return 'Checking sign-in status...';
+    }
+
+    if (authState === 'error') {
+      return 'Sign-in setup hit a problem. Local archive stays available.';
+    }
+
+    if (!authUser) {
+      return 'Choose Guest first, or sign in with Google for cross-device archive sync.';
+    }
+
+    if (authUser.isAnonymous) {
+      return 'Signed in as Guest. This device/browser will keep the same private archive.';
+    }
+
+    return `Signed in with Google as ${authUser.displayName || authUser.email || 'your account'}.`;
+  }, [authState, authUser]);
+
   const gameHistory = useMemo(() => {
     if (cloudLoadState !== 'ready') {
       return localHistory;
@@ -124,22 +201,36 @@ export default function App() {
     const merged = [...cloudHistory, ...localHistory];
     const seen = new Set();
 
-    return merged.filter((game) => {
-      const timestamp = game.createdAtMs || Date.parse(game.createdAt || '') || 0;
-      const key = `${timestamp}-${game.winner}-${game.players.length}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).sort((a, b) => {
-      const aTime = a.createdAtMs || Date.parse(a.createdAt || '') || 0;
-      const bTime = b.createdAtMs || Date.parse(b.createdAt || '') || 0;
-      return bTime - aTime;
-    });
+    return merged
+      .filter((game) => {
+        const timestamp = game.createdAtMs || Date.parse(game.createdAt || '') || 0;
+        const key = `${timestamp}-${game.winner}-${game.players.length}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => {
+        const aTime = a.createdAtMs || Date.parse(a.createdAt || '') || 0;
+        const bTime = b.createdAtMs || Date.parse(b.createdAt || '') || 0;
+        return bTime - aTime;
+      });
   }, [cloudHistory, cloudLoadState, localHistory]);
 
   const archiveStatusLabel = useMemo(() => {
     if (!isFirebaseConfigured) {
       return 'Archive mode: local only';
+    }
+
+    if (authState === 'loading' || authActionState !== 'idle') {
+      return 'Archive mode: preparing your private cloud archive...';
+    }
+
+    if (authState === 'error') {
+      return 'Archive mode: sign-in setup failed, local backup only';
+    }
+
+    if (!authUser) {
+      return 'Archive mode: local only until you choose Guest or Google';
     }
 
     if (cloudSaveState === 'saving') {
@@ -159,7 +250,7 @@ export default function App() {
     }
 
     return 'Archive mode: private Firestore archive live';
-  }, [cloudLoadState, cloudSaveState]);
+  }, [authActionState, authState, authUser, cloudLoadState, cloudSaveState]);
 
   const resetRoundInputs = () => {
     setWinnerId(null);
@@ -191,7 +282,7 @@ export default function App() {
 
     setLocalHistory((prev) => [archiveEntry, ...prev]);
 
-    if (isFirebaseConfigured) {
+    if (isFirebaseConfigured && authUser) {
       setCloudSaveState('saving');
       saveArchivedGame(archiveEntry)
         .then(() => {
@@ -203,6 +294,52 @@ export default function App() {
           setCloudSaveState('error');
           setCloudErrorMessage(`Game was saved locally, but Firestore save failed. ${getFirebaseAuthErrorMessage(error)}`);
         });
+    }
+  };
+
+  const handleGuestLogin = async () => {
+    setAuthActionState('guest');
+    setCloudErrorMessage('');
+
+    try {
+      await signInAsGuest();
+    } catch (error) {
+      console.error('Guest sign-in failed', error);
+      setCloudErrorMessage(`Guest sign-in failed. ${getFirebaseAuthErrorMessage(error)}`);
+      setAuthState('error');
+    } finally {
+      setAuthActionState('idle');
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setAuthActionState('google');
+    setCloudErrorMessage('');
+
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      console.error('Google sign-in failed', error);
+      setCloudErrorMessage(`Google sign-in failed. ${getFirebaseAuthErrorMessage(error)}`);
+      setAuthState('error');
+      setAuthActionState('idle');
+      return;
+    }
+
+    setAuthActionState('idle');
+  };
+
+  const handleSignOut = async () => {
+    const confirmed = window.confirm('Sign out and switch login mode? Your private cloud archive stays saved, but this device will stop showing it until you sign in again.');
+    if (!confirmed) return;
+
+    try {
+      await signOutFromRemi();
+      setCloudSaveState('idle');
+      setCloudErrorMessage('');
+    } catch (error) {
+      console.error('Sign out failed', error);
+      setCloudErrorMessage(`Sign out failed. ${getFirebaseAuthErrorMessage(error)}`);
     }
   };
 
@@ -423,6 +560,51 @@ export default function App() {
           <p className="subtitle">Create the table, pick the first shuffler, and track every round cleanly.</p>
           <p className="archive-note archive-note--setup">{archiveStatusLabel}</p>
           {cloudErrorMessage && <p className="archive-error">{cloudErrorMessage}</p>}
+
+          <section className="auth-panel">
+            <div className="auth-panel__copy">
+              <p className="eyebrow eyebrow--dark">Private archive</p>
+              <h2>1. Guest login</h2>
+              <p className="subtitle subtitle--dark">Recommended first. Fast start, no account needed.</p>
+              <button
+                className="primary-button auth-button"
+                onClick={handleGuestLogin}
+                disabled={authActionState !== 'idle'}
+              >
+                {authActionState === 'guest' ? 'Signing in…' : authUser?.isAnonymous ? 'Signed in as Guest' : 'Continue as Guest'}
+              </button>
+
+              <div className="auth-panel__divider">or</div>
+
+              <h2>2. Google login</h2>
+              <p className="subtitle subtitle--dark">Use Google if you want the same archive across devices.</p>
+              <button
+                className="secondary-button auth-button auth-button--google"
+                onClick={handleGoogleLogin}
+                disabled={authActionState !== 'idle'}
+              >
+                {authActionState === 'google'
+                  ? 'Opening Google sign-in…'
+                  : authUser && !authUser.isAnonymous
+                    ? 'Signed in with Google'
+                    : authUser?.isAnonymous
+                      ? 'Upgrade Guest to Google'
+                      : 'Continue with Google'}
+              </button>
+            </div>
+
+            <div className="auth-panel__status">
+              <span className={`auth-badge ${authUser ? 'auth-badge--connected' : ''}`}>
+                {authUser ? (authUser.isAnonymous ? 'Guest active' : 'Google active') : 'Not signed in'}
+              </span>
+              <p className="auth-panel__hint">{authModeLabel}</p>
+              {authUser && (
+                <button className="secondary-button auth-button auth-button--switch" onClick={handleSignOut}>
+                  Sign out / switch
+                </button>
+              )}
+            </div>
+          </section>
 
           <div className="top-actions">
             <button className="secondary-button" onClick={() => setShowHistory(true)}>
