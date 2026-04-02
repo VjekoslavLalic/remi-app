@@ -153,6 +153,7 @@ h2 {
   margin-bottom: 0;
 }
 
+
 .game-header--stacked {
   align-items: flex-start;
 }
@@ -261,35 +262,35 @@ h2 {
 }
 
 .score-input--editing {
-  border-color: #93a0ff;
-  background: #eef1ff;
-  color: #3043a2;
-  box-shadow: 0 0 0 3px rgba(123, 137, 255, 0.18);
+  border-color: #7ac78b;
+  background: #eefaf0;
+  color: #227340;
+  box-shadow: 0 0 0 3px rgba(122, 199, 139, 0.18);
 }
 
 .score-input--editing-has-value {
-  background: #e8ecff;
+  background: #e7f7ea;
 }
 
 .score-input--filled {
-  border-color: #7482ff;
-  background: #dde3ff;
-  color: #2a3c97;
+  border-color: #5eb878;
+  background: #d9f1df;
+  color: #1f6d38;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 .score-input--auto {
-  border-color: #6c7cff;
-  background: #dbe2ff;
-  color: #25368f;
+  border-color: #56b973;
+  background: #d6f0dd;
+  color: #155f2e;
   font-weight: 800;
   text-align: center;
 }
 
 .score-input--auto:disabled {
   opacity: 1;
-  -webkit-text-fill-color: #25368f;
-  color: #25368f;
+  -webkit-text-fill-color: #155f2e;
+  color: #155f2e;
   cursor: default;
 }
 
