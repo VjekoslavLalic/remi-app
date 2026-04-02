@@ -6,7 +6,7 @@ import {
   orderBy,
   query,
 } from 'firebase/firestore';
-import { db, ensureAnonymousAuth, getCurrentUserUid, isFirebaseConfigured } from './firebase';
+import { db, getCurrentUserUid, isFirebaseConfigured } from './firebase';
 
 const USERS_COLLECTION = 'users';
 const ARCHIVE_COLLECTION = 'remiArchive';
@@ -34,45 +34,28 @@ export function subscribeToArchivedGames(onData, onError) {
     return () => {};
   }
 
-  let unsubscribe = () => {};
-  let active = true;
+  const uid = getCurrentUserUid();
 
-  ensureAnonymousAuth()
-    .then((user) => {
-      if (!active) return;
+  if (!uid) {
+    onData([]);
+    return () => {};
+  }
 
-      const uid = user?.uid || getCurrentUserUid();
-      if (!uid) {
-        onData([]);
-        return;
-      }
+  const archiveQuery = query(
+    getUserArchiveCollection(uid),
+    orderBy('createdAtMs', 'desc'),
+    limit(100),
+  );
 
-      const archiveQuery = query(
-        getUserArchiveCollection(uid),
-        orderBy('createdAtMs', 'desc'),
-        limit(100),
-      );
-
-      unsubscribe = onSnapshot(
-        archiveQuery,
-        (snapshot) => {
-          onData(snapshot.docs.map(mapGame));
-        },
-        (error) => {
-          onError?.(error);
-        },
-      );
-    })
-    .catch((error) => {
-      if (!active) return;
+  return onSnapshot(
+    archiveQuery,
+    (snapshot) => {
+      onData(snapshot.docs.map(mapGame));
+    },
+    (error) => {
       onError?.(error);
-      onData([]);
-    });
-
-  return () => {
-    active = false;
-    unsubscribe();
-  };
+    },
+  );
 }
 
 export async function saveArchivedGame(game) {
@@ -80,8 +63,7 @@ export async function saveArchivedGame(game) {
     return null;
   }
 
-  const user = await ensureAnonymousAuth();
-  const uid = user?.uid || getCurrentUserUid();
+  const uid = getCurrentUserUid();
 
   if (!uid) {
     throw new Error('No authenticated Firebase user available for archive save.');
