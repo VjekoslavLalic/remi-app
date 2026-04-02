@@ -511,52 +511,79 @@ export default function App() {
     if (!authUser) return null;
 
     return (
-      <>
-        <button
-          className="account-menu-trigger"
-          aria-label="Open account options"
-          onClick={() => setShowAccountSheet((current) => !current)}
-        >
-          ⋯
-        </button>
-
-        {showAccountSheet && (
-          <div className="account-sheet-overlay" onClick={() => setShowAccountSheet(false)}>
-            <div className="account-sheet" onClick={(event) => event.stopPropagation()}>
-              <div className="account-sheet__header">
-                <div>
-                  <p className="eyebrow eyebrow--dark">Account</p>
-                  <h2>{accountPrimaryLabel}</h2>
-                  <p className="auth-panel__hint">{authModeLabel}</p>
-                </div>
-                <button className="account-sheet__close" onClick={() => setShowAccountSheet(false)}>×</button>
-              </div>
-
-              <div className="account-sheet__actions">
-                {authUser.isAnonymous && (
-                  <button
-                    className="secondary-button auth-button auth-button--google auth-button--panel"
-                    onClick={handleGoogleLogin}
-                    disabled={authActionState !== 'idle'}
-                  >
-                    {authActionState === 'google' ? 'Opening Google sign-in…' : 'Upgrade guest to Google'}
-                  </button>
-                )}
-
-                <button
-                  className="secondary-button auth-button auth-button--switch auth-button--panel"
-                  onClick={handleSignOut}
-                  disabled={authActionState !== 'idle'}
-                >
-                  Sign out / switch account
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </>
+      <button
+        className="account-menu-trigger"
+        aria-label="Open account options"
+        onClick={() => setShowAccountSheet(true)}
+      >
+        ⋯
+      </button>
     );
   };
+
+
+  if (showAccountSheet && authUser) {
+    return (
+      <div className="app-shell">
+        <div className="screen-card account-screen">
+          <div className="account-screen__header">
+            <div>
+              <p className="eyebrow">Account</p>
+              <h1>{accountPrimaryLabel}</h1>
+              <p className="subtitle">{authModeLabel}</p>
+              <p className="archive-note">{archiveStatusLabel}</p>
+              {cloudErrorMessage && <p className="archive-error">{cloudErrorMessage}</p>}
+            </div>
+            <button className="account-screen__close" onClick={() => setShowAccountSheet(false)} aria-label="Close account screen">
+              ×
+            </button>
+          </div>
+
+          <div className="account-screen__body">
+            {authUser.isAnonymous ? (
+              <div className="account-screen__card">
+                <p className="eyebrow eyebrow--dark">Upgrade</p>
+                <h2>Continue with Google</h2>
+                <p className="subtitle subtitle--dark">
+                  Keep your archive across devices by linking your current Guest profile to Google.
+                </p>
+                <button
+                  className="auth-action-button auth-action-button--google"
+                  onClick={handleGoogleLogin}
+                  disabled={authActionState !== 'idle'}
+                >
+                  {authActionState === 'google' ? 'Opening Google sign-in…' : 'Upgrade guest to Google'}
+                </button>
+              </div>
+            ) : (
+              <div className="account-screen__card">
+                <p className="eyebrow eyebrow--dark">Connected</p>
+                <h2>Google account active</h2>
+                <p className="subtitle subtitle--dark">
+                  Your private archive will stay available anywhere you sign in with this Google account.
+                </p>
+              </div>
+            )}
+
+            <div className="account-screen__card">
+              <p className="eyebrow eyebrow--dark">Switch account</p>
+              <h2>Sign out</h2>
+              <p className="subtitle subtitle--dark">
+                Sign out if you want to switch between Guest mode and Google login.
+              </p>
+              <button
+                className="auth-action-button auth-action-button--switch"
+                onClick={handleSignOut}
+                disabled={authActionState !== 'idle'}
+              >
+                Sign out / switch account
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (showHistory) {
     return (
@@ -782,7 +809,7 @@ export default function App() {
               <p className="subtitle">Shuffler: <strong>{currentShuffler?.name}</strong></p>
             </div>
             <button className="danger-primary-button" onClick={endGame}>
-              Status
+              End game
             </button>
           </div>
 
