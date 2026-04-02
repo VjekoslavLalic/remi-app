@@ -77,6 +77,7 @@ export default function App() {
   const [authUser, setAuthUser] = useState(null);
   const [authState, setAuthState] = useState(isFirebaseConfigured ? 'loading' : 'disabled');
   const [authActionState, setAuthActionState] = useState('idle');
+  const [showAccountSheet, setShowAccountSheet] = useState(false);
   const [localHistory, setLocalHistory] = useState(() => {
     try {
       const stored = localStorage.getItem(HISTORY_KEY);
@@ -216,6 +217,12 @@ export default function App() {
       });
   }, [cloudHistory, cloudLoadState, localHistory]);
 
+  const accountPrimaryLabel = useMemo(() => {
+    if (!authUser) return 'Not signed in';
+    if (authUser.isAnonymous) return 'Guest mode active';
+    return authUser.displayName || authUser.email || 'Google account active';
+  }, [authUser]);
+
   const archiveStatusLabel = useMemo(() => {
     if (!isFirebaseConfigured) {
       return 'Archive mode: local only';
@@ -326,6 +333,7 @@ export default function App() {
       return;
     }
 
+    setShowAccountSheet(false);
     setAuthActionState('idle');
   };
 
@@ -337,6 +345,7 @@ export default function App() {
       await signOutFromRemi();
       setCloudSaveState('idle');
       setCloudErrorMessage('');
+      setShowAccountSheet(false);
     } catch (error) {
       console.error('Sign out failed', error);
       setCloudErrorMessage(`Sign out failed. ${getFirebaseAuthErrorMessage(error)}`);
@@ -364,6 +373,7 @@ export default function App() {
     resetRoundInputs();
     setGameView('roundSetup');
     setStep('game');
+    setShowAccountSheet(false);
   };
 
   const proceedToRoundScores = () => {
@@ -497,9 +507,61 @@ export default function App() {
     setStep('end');
   };
 
+  const renderAccountControls = () => {
+    if (!authUser) return null;
+
+    return (
+      <>
+        <button
+          className="account-menu-trigger"
+          aria-label="Open account options"
+          onClick={() => setShowAccountSheet((current) => !current)}
+        >
+          ⋯
+        </button>
+
+        {showAccountSheet && (
+          <div className="account-sheet-overlay" onClick={() => setShowAccountSheet(false)}>
+            <div className="account-sheet" onClick={(event) => event.stopPropagation()}>
+              <div className="account-sheet__header">
+                <div>
+                  <p className="eyebrow eyebrow--dark">Account</p>
+                  <h2>{accountPrimaryLabel}</h2>
+                  <p className="auth-panel__hint">{authModeLabel}</p>
+                </div>
+                <button className="account-sheet__close" onClick={() => setShowAccountSheet(false)}>×</button>
+              </div>
+
+              <div className="account-sheet__actions">
+                {authUser.isAnonymous && (
+                  <button
+                    className="secondary-button auth-button auth-button--google auth-button--panel"
+                    onClick={handleGoogleLogin}
+                    disabled={authActionState !== 'idle'}
+                  >
+                    {authActionState === 'google' ? 'Opening Google sign-in…' : 'Upgrade guest to Google'}
+                  </button>
+                )}
+
+                <button
+                  className="secondary-button auth-button auth-button--switch auth-button--panel"
+                  onClick={handleSignOut}
+                  disabled={authActionState !== 'idle'}
+                >
+                  Sign out / switch account
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+
   if (showHistory) {
     return (
       <div className="app-shell">
+        {renderAccountControls()}
         <div className="screen-card history-screen">
           <div className="history-header">
             <div>
@@ -554,6 +616,7 @@ export default function App() {
   if (step === 'setup') {
     return (
       <div className="app-shell">
+        {renderAccountControls()}
         <div className="screen-card setup-screen">
           <p className="eyebrow">Score tracker</p>
           <h1>Remi</h1>
@@ -561,50 +624,39 @@ export default function App() {
           <p className="archive-note archive-note--setup">{archiveStatusLabel}</p>
           {cloudErrorMessage && <p className="archive-error">{cloudErrorMessage}</p>}
 
-          <section className="auth-panel">
-            <div className="auth-panel__copy">
-              <p className="eyebrow eyebrow--dark">Private archive</p>
-              <h2>1. Guest login</h2>
-              <p className="subtitle subtitle--dark">Recommended first. Fast start, no account needed.</p>
-              <button
-                className="primary-button auth-button"
-                onClick={handleGuestLogin}
-                disabled={authActionState !== 'idle'}
-              >
-                {authActionState === 'guest' ? 'Signing in…' : authUser?.isAnonymous ? 'Signed in as Guest' : 'Continue as Guest'}
-              </button>
-
-              <div className="auth-panel__divider">or</div>
-
-              <h2>2. Google login</h2>
-              <p className="subtitle subtitle--dark">Use Google if you want the same archive across devices.</p>
-              <button
-                className="secondary-button auth-button auth-button--google"
-                onClick={handleGoogleLogin}
-                disabled={authActionState !== 'idle'}
-              >
-                {authActionState === 'google'
-                  ? 'Opening Google sign-in…'
-                  : authUser && !authUser.isAnonymous
-                    ? 'Signed in with Google'
-                    : authUser?.isAnonymous
-                      ? 'Upgrade Guest to Google'
-                      : 'Continue with Google'}
-              </button>
-            </div>
-
-            <div className="auth-panel__status">
-              <span className={`auth-badge ${authUser ? 'auth-badge--connected' : ''}`}>
-                {authUser ? (authUser.isAnonymous ? 'Guest active' : 'Google active') : 'Not signed in'}
-              </span>
-              <p className="auth-panel__hint">{authModeLabel}</p>
-              {authUser && (
-                <button className="secondary-button auth-button auth-button--switch" onClick={handleSignOut}>
-                  Sign out / switch
+          {!authUser && (
+            <section className="auth-panel">
+              <div className="auth-panel__copy">
+                <p className="eyebrow eyebrow--dark">Private archive</p>
+                <h2>1. Guest login</h2>
+                <p className="subtitle subtitle--dark">Recommended first. Fast start, no account needed.</p>
+                <button
+                  className="primary-button auth-button"
+                  onClick={handleGuestLogin}
+                  disabled={authActionState !== 'idle'}
+                >
+                  {authActionState === 'guest' ? 'Signing in…' : 'Continue as Guest'}
                 </button>
-              )}
-            </div>
-          </section>
+
+                <div className="auth-panel__divider">or</div>
+
+                <h2>2. Google login</h2>
+                <p className="subtitle subtitle--dark">Use Google if you want the same archive across devices.</p>
+                <button
+                  className="secondary-button auth-button auth-button--google auth-button--strong"
+                  onClick={handleGoogleLogin}
+                  disabled={authActionState !== 'idle'}
+                >
+                  {authActionState === 'google' ? 'Opening Google sign-in…' : 'Continue with Google'}
+                </button>
+              </div>
+
+              <div className="auth-panel__status">
+                <span className="auth-badge">Not signed in</span>
+                <p className="auth-panel__hint">{authModeLabel}</p>
+              </div>
+            </section>
+          )}
 
           <div className="top-actions">
             <button className="secondary-button" onClick={() => setShowHistory(true)}>
@@ -657,6 +709,7 @@ export default function App() {
   if (step === 'chooseShuffler') {
     return (
       <div className="app-shell">
+        {renderAccountControls()}
         <div className="screen-card choose-screen">
           <p className="eyebrow">Before round 1</p>
           <h1>Choose the first shuffler</h1>
@@ -687,6 +740,7 @@ export default function App() {
   if (step === 'end' && gameWinner) {
     return (
       <div className="app-shell">
+        {renderAccountControls()}
         <div className="screen-card end-screen">
           <p className="eyebrow">Game finished</p>
           <h1>{gameWinner.name} wins</h1>
@@ -719,6 +773,7 @@ export default function App() {
   if (gameView === 'roundSetup') {
     return (
       <div className="app-shell">
+        {renderAccountControls()}
         <div className="screen-card round-setup-screen">
           <div className="game-header game-header--stacked">
             <div>
@@ -776,6 +831,7 @@ export default function App() {
 
   return (
     <div className="app-shell app-shell--scores">
+      {renderAccountControls()}
       <div className="screen-card game-screen game-screen--scores">
         <div className="round-summary-card">
           <div>
