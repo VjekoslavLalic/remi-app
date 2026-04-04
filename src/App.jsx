@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
-import { saveArchivedGame, subscribeToArchivedGames } from './archiveService';
+import { deleteArchivedGame, saveArchivedGame, subscribeToArchivedGames } from './archiveService';
 import {
   getFirebaseAuthErrorMessage,
   isFirebaseConfigured,
@@ -46,6 +46,11 @@ function buildArchivedGame(players, winnerName, roundNumber) {
       score: player.score,
     })),
   };
+}
+
+function getArchiveSignature(game) {
+  const timestamp = game.createdAtMs || Date.parse(game.createdAt || '') || 0;
+  return `${timestamp}-${game.winner}-${game.players.length}`;
 }
 
 function normalizeRoundScoreInput(value) {
