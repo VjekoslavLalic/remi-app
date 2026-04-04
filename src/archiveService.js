@@ -1,6 +1,8 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
+  doc,
   limit,
   onSnapshot,
   orderBy,
@@ -82,4 +84,19 @@ export async function saveArchivedGame(game) {
   };
 
   return addDoc(getUserArchiveCollection(uid), payload);
+}
+
+
+export async function deleteArchivedGame(gameId) {
+  if (!isFirebaseConfigured || !db) {
+    return null;
+  }
+
+  const uid = getCurrentUserUid();
+
+  if (!uid) {
+    throw new Error('No authenticated Firebase user available for archive delete.');
+  }
+
+  return deleteDoc(doc(db, USERS_COLLECTION, uid, ARCHIVE_COLLECTION, gameId));
 }
