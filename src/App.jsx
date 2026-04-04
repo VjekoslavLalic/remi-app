@@ -12,6 +12,7 @@ import {
 } from './firebase';
 
 const HISTORY_KEY = 'remi-history-v1';
+const ACTIVE_GAME_KEY = 'remi-active-game-v1';
 
 const initialPlayer = (name, index) => ({
   id: `${Date.now()}-${index}-${name}`,
@@ -78,6 +79,7 @@ export default function App() {
   const [authState, setAuthState] = useState(isFirebaseConfigured ? 'loading' : 'disabled');
   const [authActionState, setAuthActionState] = useState('idle');
   const [showAccountSheet, setShowAccountSheet] = useState(false);
+  const [hasLoadedActiveGame, setHasLoadedActiveGame] = useState(false);
   const [localHistory, setLocalHistory] = useState(() => {
     try {
       const stored = localStorage.getItem(HISTORY_KEY);
@@ -91,6 +93,74 @@ export default function App() {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(localHistory));
   }, [localHistory]);
 
+
+  useEffect(() => {
+  try {
+    const storedActiveGame = localStorage.getItem(ACTIVE_GAME_KEY);
+
+    if (storedActiveGame) {
+      const parsedGame = JSON.parse(storedActiveGame);
+
+      setStep(parsedGame.step ?? 'setup');
+      setGameView(parsedGame.gameView ?? 'roundSetup');
+      setNumPlayers(parsedGame.numPlayers ?? 2);
+      setPlayerNames(parsedGame.playerNames ?? ['', '']);
+      setPlayers(parsedGame.players ?? []);
+      setCurrentShufflerIndex(parsedGame.currentShufflerIndex ?? 0);
+      setWinnerId(parsedGame.winnerId ?? null);
+      setWinnerType(parsedGame.winnerType ?? 'regular');
+      setRoundScores(parsedGame.roundScores ?? {});
+      setActiveScorePlayerId(parsedGame.activeScorePlayerId ?? null);
+      setRoundNumber(parsedGame.roundNumber ?? 1);
+      setGameWinner(parsedGame.gameWinner ?? null);
+      setPendingPlayers(parsedGame.pendingPlayers ?? []);
+    }
+  } catch (error) {
+    console.error('Failed to load active game state', error);
+  } finally {
+    setHasLoadedActiveGame(true);
+  }
+}, []);
+
+useEffect(() => {
+  if (!hasLoadedActiveGame) {
+    return;
+  }
+
+  const activeGameState = {
+    step,
+    gameView,
+    numPlayers,
+    playerNames,
+    players,
+    currentShufflerIndex,
+    winnerId,
+    winnerType,
+    roundScores,
+    activeScorePlayerId,
+    roundNumber,
+    gameWinner,
+    pendingPlayers,
+  };
+
+  localStorage.setItem(ACTIVE_GAME_KEY, JSON.stringify(activeGameState));
+}, [
+  activeScorePlayerId,
+  gameView,
+  gameWinner,
+  hasLoadedActiveGame,
+  numPlayers,
+  pendingPlayers,
+  playerNames,
+  players,
+  currentShufflerIndex,
+  roundNumber,
+  roundScores,
+  step,
+  winnerId,
+  winnerType,
+]);
+  
   useEffect(() => {
     if (!isFirebaseConfigured) {
       return undefined;
@@ -266,17 +336,20 @@ export default function App() {
     setOpenMenuPlayerId(null);
     setActiveScorePlayerId(null);
   };
-
-  const clearGameState = () => {
-    setStep('setup');
-    setGameView('roundSetup');
-    setPlayers([]);
-    setPendingPlayers([]);
-    setCurrentShufflerIndex(0);
-    setRoundNumber(1);
-    setGameWinner(null);
-    resetRoundInputs();
-  };
+const clearSavedActiveGame = () => {
+  localStorage.removeItem(ACTIVE_GAME_KEY);
+};
+const clearGameState = () => {
+  setStep('setup');
+  setGameView('roundSetup');
+  setPlayers([]);
+  setPendingPlayers([]);
+  setCurrentShufflerIndex(0);
+  setRoundNumber(1);
+  setGameWinner(null);
+  resetRoundInputs();
+  clearSavedActiveGame();
+};
 
   const confirmGoHome = () => {
     const confirmed = window.confirm('Are you sure you want to go home? Current game progress will stay only if you finish the game first.');
