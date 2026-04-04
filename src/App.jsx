@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import './App.css';
-import { saveArchivedGame, subscribeToArchivedGames } from './archiveService';
+import { deleteArchivedGame, saveArchivedGame, subscribeToArchivedGames } from './archiveService';
 import {
   getFirebaseAuthErrorMessage,
   isFirebaseConfigured,
@@ -46,6 +46,11 @@ function buildArchivedGame(players, winnerName, roundNumber) {
       score: player.score,
     })),
   };
+}
+
+function getArchiveSignature(game) {
+  const timestamp = game.createdAtMs || Date.parse(game.createdAt || '') || 0;
+  return `${timestamp}-${game.winner}-${game.players.length}`;
 }
 
 function normalizeRoundScoreInput(value) {
@@ -265,27 +270,40 @@ useEffect(() => {
   }, [authState, authUser]);
 
   const gameHistory = useMemo(() => {
-    if (cloudLoadState !== 'ready') {
-      return localHistory;
-    }
+  const localGamesWithSource = localHistory.map((game) => ({
+    ...game,
+    source: 'local',
+  }));
 
-    const merged = [...cloudHistory, ...localHistory];
-    const seen = new Set();
+  if (cloudLoadState !== 'ready') {
+    return localGamesWithSource.sort((a, b) => {
+      const aTime = a.createdAtMs || Date.parse(a.createdAt || '') || 0;
+      const bTime = b.createdAtMs || Date.parse(b.createdAt || '') || 0;
+      return bTime - aTime;
+    });
+  }
 
-    return merged
-      .filter((game) => {
-        const timestamp = game.createdAtMs || Date.parse(game.createdAt || '') || 0;
-        const key = `${timestamp}-${game.winner}-${game.players.length}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .sort((a, b) => {
-        const aTime = a.createdAtMs || Date.parse(a.createdAt || '') || 0;
-        const bTime = b.createdAtMs || Date.parse(b.createdAt || '') || 0;
-        return bTime - aTime;
-      });
-  }, [cloudHistory, cloudLoadState, localHistory]);
+  const cloudGamesWithSource = cloudHistory.map((game) => ({
+    ...game,
+    source: 'cloud',
+  }));
+
+  const merged = [...cloudGamesWithSource, ...localGamesWithSource];
+  const seen = new Set();
+
+  return merged
+    .filter((game) => {
+      const key = getArchiveSignature(game);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => {
+      const aTime = a.createdAtMs || Date.parse(a.createdAt || '') || 0;
+      const bTime = b.createdAtMs || Date.parse(b.createdAt || '') || 0;
+      return bTime - aTime;
+    });
+}, [cloudHistory, cloudLoadState, localHistory]);
 
   const accountPrimaryLabel = useMemo(() => {
     if (!authUser) return 'Not signed in';
@@ -336,6 +354,14 @@ useEffect(() => {
     setOpenMenuPlayerId(null);
     setActiveScorePlayerId(null);
   };
+
+  const removeLocalArchivedGame = (gameToDelete) => {
+  const signatureToDelete = getArchiveSignature(gameToDelete);
+
+  setLocalHistory((prev) =>
+    prev.filter((game) => getArchiveSignature(game) !== signatureToDelete),
+  );
+};
 const clearSavedActiveGame = () => {
   localStorage.removeItem(ACTIVE_GAME_KEY);
 };
@@ -351,12 +377,18 @@ const clearGameState = () => {
   clearSavedActiveGame();
 };
 
-  const confirmGoHome = () => {
-    const confirmed = window.confirm('Are you sure you want to go home? Current game progress will stay only if you finish the game first.');
-    if (!confirmed) return;
+ const confirmGoHome = () => {
+  if (!gameWinner) {
     clearGameState();
-  };
+    return;
+  }
 
+  const confirmed = window.confirm(`Save finished game for ${gameWinner.name} and go home?`);
+  if (!confirmed) return;
+
+  archiveFinishedGame(players, gameWinner.name);
+  clearGameState();
+};
   const archiveFinishedGame = (finalPlayers, winnerName) => {
     const archiveEntry = buildArchivedGame(finalPlayers, winnerName, roundNumber);
 
@@ -376,6 +408,25 @@ const clearGameState = () => {
         });
     }
   };
+
+  const handleDeleteArchivedGame = async (game) => {
+  const confirmed = window.confirm(`Are you sure you want to delete the archived game won by ${game.winner}?`);
+  if (!confirmed) return;
+
+  removeLocalArchivedGame(game);
+
+  if (game.source === 'cloud') {
+    try {
+      await deleteArchivedGame(game.id);
+      setCloudErrorMessage('');
+    } catch (error) {
+      console.error('Failed to delete Firestore archive', error);
+      setCloudErrorMessage(`Archive delete failed. ${getFirebaseAuthErrorMessage(error)}`);
+    }
+  }
+
+  setExpandedHistoryId((current) => (current === game.id ? null : current));
+};
 
   const handleGuestLogin = async () => {
     setAuthActionState('guest');
@@ -533,13 +584,12 @@ const clearGameState = () => {
     }
 
     if (remainingPlayers.length === 1) {
-      const winner = remainingPlayers[0];
-      setPlayers(remainingPlayers);
-      setGameWinner({ name: winner.name, score: winner.score });
-      archiveFinishedGame(remainingPlayers, winner.name);
-      setStep('end');
-      return;
-    }
+  const winner = remainingPlayers[0];
+  setPlayers(remainingPlayers);
+  setGameWinner({ name: winner.name, score: winner.score });
+  setStep('end');
+  return;
+}
 
     let nextShufflerIndex = currentShufflerIndex;
     if (removedIndex < currentShufflerIndex) {
@@ -565,20 +615,19 @@ const clearGameState = () => {
   };
 
   const endGame = () => {
-    if (!players.length) return;
+  if (!players.length) return;
 
-    const winner = players.reduce(
-      (best, player) => (player.score < best.score ? { name: player.name, score: player.score } : best),
-      {
-        name: players[0].name,
-        score: players[0].score,
-      },
-    );
+  const winner = players.reduce(
+    (best, player) => (player.score < best.score ? { name: player.name, score: player.score } : best),
+    {
+      name: players[0].name,
+      score: players[0].score,
+    },
+  );
 
-    setGameWinner(winner);
-    archiveFinishedGame(players, winner.name);
-    setStep('end');
-  };
+  setGameWinner(winner);
+  setStep('end');
+};
 
   const renderAccountControls = () => {
     if (!authUser) return null;
@@ -694,15 +743,24 @@ const clearGameState = () => {
                       <span>{expanded ? 'Hide' : 'Show'}</span>
                     </button>
                     {expanded && (
-                      <div className="history-item__details">
-                        {game.players.map((player) => (
-                          <div key={`${game.id}-${player.name}`} className="history-player-row">
-                            <span>{player.name}</span>
-                            <strong>{player.score}</strong>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+  <div className="history-item__details">
+    {game.players.map((player) => (
+      <div key={`${game.id}-${player.name}`} className="history-player-row">
+        <span>{player.name}</span>
+        <strong>{player.score}</strong>
+      </div>
+    ))}
+
+    <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'flex-end' }}>
+      <button
+        className="secondary-button"
+        onClick={() => handleDeleteArchivedGame(game)}
+      >
+        Delete
+      </button>
+    </div>
+  </div>
+)}
                   </div>
                 );
               })}
